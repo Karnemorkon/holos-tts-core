@@ -29,13 +29,13 @@ add_library(holos_core
   src/core/ipa_uk.cpp
 )
 target_include_directories(holos_core PUBLIC src)
-target_link_libraries(holos_core PUBLIC nlohmann_json::nlohmann_json)
+target_link_libraries(holos_core PUBLIC nlohmann_json::nlohmann_json pcre2-8)
 
 find_package(marisa QUIET)
 if(marisa_FOUND)
   target_link_libraries(holos_core PUBLIC marisa)
 else()
-  # FetchContent add_subdirectory експортує аlias Marisa::marisa
+  # FetchContent add_subdirectory експортує alias Marisa::marisa
   target_link_libraries(holos_core PUBLIC Marisa::marisa)
 endif()
 

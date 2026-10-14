@@ -14,6 +14,19 @@ set(MARISA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(MARISA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(marisa)
 
+# PCRE2: Unicode-aware regex engine for the ipa_uk phonemizer (parity with Python re).
+FetchContent_Declare(pcre2
+  GIT_REPOSITORY https://github.com/PCRE2Project/pcre2.git
+  GIT_TAG pcre2-10.44)
+set(PCRE2_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(PCRE2_BUILD_PCRE2_16 OFF CACHE BOOL "" FORCE)
+set(PCRE2_BUILD_PCRE2_32 OFF CACHE BOOL "" FORCE)
+set(PCRE2_SUPPORT_LIBEDIT OFF CACHE BOOL "" FORCE)
+set(PCRE2_SUPPORT_LIBBZ2 OFF CACHE BOOL "" FORCE)
+set(PCRE2_SUPPORT_LIBZ OFF CACHE BOOL "" FORCE)
+set(PCRE2_SUPPORT_LIBREADLINE OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(pcre2)
+
 # dr_wav: tiny public-domain WAV reader/writer (used when ORT audio path is on)
 if(HOLOS_WITH_ORT)
   FetchContent_Declare(dr_wav
