@@ -1,0 +1,29 @@
+# Build
+build/
+build-*/
+cmake-build-*/
+CMakeUserPresets.json
+
+# IDE
+.vscode/
+.idea/
+compile_commands.json
+
+# Deps (FetchContent)
+_deps/
+
+# Models / data (not in repo)
+*.trie
+*.onnx
+*.pt
+models/
+voices.json
+
+# Misc
+*.o
+*.a
+*.so
+*.wav
+*.mp3
+__pycache__/
+.DS_Store

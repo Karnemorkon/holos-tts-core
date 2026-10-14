@@ -1,0 +1,37 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Default (ORT on, CT2/server off)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "HOLOS_FETCH_DEPS": "ON",
+        "HOLOS_WITH_ORT": "ON",
+        "HOLOS_WITH_CT2": "OFF",
+        "HOLOS_WITH_SERVER": "OFF",
+        "HOLOS_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "full",
+      "displayName": "Full (ORT + CT2 + server)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-full",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "HOLOS_FETCH_DEPS": "ON",
+        "HOLOS_WITH_ORT": "ON",
+        "HOLOS_WITH_CT2": "ON",
+        "HOLOS_WITH_SERVER": "ON",
+        "HOLOS_BUILD_TESTS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "default", "configurePreset": "default" },
+    { "name": "full", "configurePreset": "full" }
+  ]
+}
