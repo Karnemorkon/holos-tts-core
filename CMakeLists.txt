@@ -40,7 +40,7 @@ else()
 endif()
 
 if(HOLOS_WITH_ORT)
-  target_sources(holos_core PRIVATE src/core/phonemize.cpp src/core/synth.cpp src/core/voices.cpp src/core/audio.cpp)
+  target_sources(holos_core PRIVATE src/core/phonemize.cpp src/core/synth.cpp src/core/voices.cpp src/core/audio.cpp src/core/accentor.cpp)
   target_compile_definitions(holos_core PUBLIC HOLOS_WITH_ORT=1)
   if(HOLOS_ORT_ROOT)
     target_include_directories(holos_core PUBLIC ${HOLOS_ORT_ROOT}/include ${HOLOS_ORT_ROOT}/include/onnxruntime/core/session)
@@ -49,11 +49,8 @@ if(HOLOS_WITH_ORT)
   target_link_libraries(holos_core PUBLIC onnxruntime)
 endif()
 
-if(HOLOS_WITH_CT2)
-  target_sources(holos_core PRIVATE src/core/verbalizer.cpp)
-  target_compile_definitions(holos_core PUBLIC HOLOS_WITH_CT2=1)
-  target_link_libraries(holos_core PUBLIC ctranslate2 sentencepiece)
-endif()
+# Rule-based verbalizer (digits/dates/time -> Ukrainian words); no external deps.
+target_sources(holos_core PRIVATE src/core/verbalizer.cpp)
 
 # --- CLI --------------------------------------------------------------------
 add_executable(holos-cli src/cli/holos_cli.cpp)

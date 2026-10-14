@@ -6,6 +6,7 @@
 #include "core/phonemize.h"
 #include "core/synth.h"
 #include "core/tokenizer.h"
+#include "core/verbalizer.h"
 #include "core/voices.h"
 
 #include <json/json.h>
@@ -47,8 +48,9 @@ struct Engine {
     std::vector<std::string> voice_names;
 
     void load(const std::string& trie, const std::string& vocab,
-              const std::string& voices_json, const std::string& onnx, int threads) {
-        phonemizer = std::make_unique<holos::Phonemizer>(trie);
+              const std::string& voices_json, const std::string& onnx,
+              const std::string& accentor, int threads) {
+        phonemizer = std::make_unique<holos::Phonemizer>(trie, accentor);
         voices = holos::Voices::load(voices_json);
         tokenizer = holos::CharTokenizer::from_vocab_json(vocab);
         synth = std::make_unique<holos::Synthesizer>(onnx, threads);
@@ -72,13 +74,16 @@ struct Engine {
     }
 
     // Повний синтез (глобальна пікова нормалізація) -> PCM16.
+    // auto_verbalize: розгорнути цифри/дати/час перед фонемізацією.
     std::vector<int16_t> synthesize_pcm(const std::string& text, const std::string& voice,
-                                        float speed, bool raw_stress) {
+                                        float speed, bool raw_stress,
+                                        bool auto_verbalize = true) {
+        std::string t = auto_verbalize ? holos::verbalize(text) : text;
         const auto& v = voices.get(voice);
         std::vector<float> audio;
         {
             std::lock_guard<std::mutex> lk(infer_mu);
-            for (const auto& p : phonemizer->phonemize(text, raw_stress)) {
+            for (const auto& p : phonemizer->phonemize(t, raw_stress)) {
                 auto chunk = synth->generate(tokenizer(p), v.data(), speed);
                 audio.insert(audio.end(), chunk.begin(), chunk.end());
             }
@@ -120,11 +125,12 @@ HttpResponsePtr json_error(int code, const std::string& detail) {
 
 // Спільна валідація конфігу синтезу (HTTP+WS). Повертає помилку або порожній рядок.
 std::string validate_synth_cfg(const Json::Value& j, std::string& text, std::string& voice,
-                               float& speed, bool& raw_stress) {
+                               float& speed, bool& raw_stress, bool& auto_verbalize) {
     text = j.get("text", j.get("input", "")).asString();
     std::string voice_name = j.get("voice", "").asString();
     speed = (float)j.get("speed", 1.0).asDouble();
     raw_stress = j.get("raw_stress", false).asBool();
+    auto_verbalize = j.get("auto_verbalize", true).asBool();
 
     std::string terr;
     if (!validate_text(text, terr)) return terr;
@@ -138,9 +144,10 @@ std::string validate_synth_cfg(const Json::Value& j, std::string& text, std::str
 // Повертає duration_sec. Колбек: (const int16_t* pcm, size_t n) -> bool (false = стоп).
 template <typename SendFn>
 double synth_stream_send(const std::string& text, const std::string& voice, float speed,
-                         bool raw_stress, SendFn&& send_chunk) {
+                         bool raw_stress, bool auto_verbalize, SendFn&& send_chunk) {
+    std::string t = auto_verbalize ? holos::verbalize(text) : text;
     double duration = 0.0;
-    for (const auto& p : g_engine.phonemize(text, raw_stress)) {
+    for (const auto& p : g_engine.phonemize(t, raw_stress)) {
         auto pcm = g_engine.synth_part_pcm(p, voice, speed);
         duration += (double)pcm.size() / holos::kSampleRate;
         if (!send_chunk(pcm.data(), pcm.size())) break;
@@ -161,6 +168,7 @@ void handle_openai_speech(const HttpRequestPtr& req,
     float speed = (float)j.get("speed", 1.0).asDouble();
     bool raw_stress = j.get("raw_stress", false).asBool();
     bool stream = j.get("stream", false).asBool();
+    bool auto_verbalize = j.get("auto_verbalize", true).asBool();
 
     if (response_format != "wav" && response_format != "pcm" && response_format != "mp3") {
         callback(json_error(400, "response_format: підтримуються wav, pcm, mp3")); return;
@@ -177,7 +185,7 @@ void handle_openai_speech(const HttpRequestPtr& req,
 
     if (!stream) {
         try {
-            auto pcm = g_engine.synthesize_pcm(input, voice, speed, raw_stress);
+            auto pcm = g_engine.synthesize_pcm(input, voice, speed, raw_stress, auto_verbalize);
             if (response_format == "wav") {
                 auto bytes = holos::wav_bytes(pcm, holos::kSampleRate);
                 auto resp = HttpResponse::newHttpResponse();
@@ -200,15 +208,15 @@ void handle_openai_speech(const HttpRequestPtr& req,
     // stream: true — chunked Transfer-Encoding; WAV: спершу 0xFFFFFFFF-заголовок.
     const bool is_wav = (response_format == "wav");
     auto resp = HttpResponse::newAsyncStreamResponse(
-        [input, voice, speed, raw_stress, is_wav](ResponseStreamPtr stream) {
-            std::thread([stream = std::move(stream), input, voice, speed, raw_stress, is_wav]() mutable {
+        [input, voice, speed, raw_stress, auto_verbalize, is_wav](ResponseStreamPtr stream) {
+            std::thread([stream = std::move(stream), input, voice, speed, raw_stress, auto_verbalize, is_wav]() mutable {
                 try {
                     if (is_wav) {
                         auto hdr = holos::wav_stream_header(holos::kSampleRate);
                         if (!stream->send(std::string(hdr.begin(), hdr.end())))
                             { stream->close(); return; }
                     }
-                    synth_stream_send(input, voice, speed, raw_stress,
+                    synth_stream_send(input, voice, speed, raw_stress, auto_verbalize,
                         [&stream](const int16_t* pcm, size_t n) {
                             std::string bytes(reinterpret_cast<const char*>(pcm), n * 2);
                             return stream->send(bytes);
@@ -237,6 +245,7 @@ void handle_synthesize(const HttpRequestPtr& req,
     std::string format = j.get("format", "wav").asString();
     float speed = (float)j.get("speed", 1.0).asDouble();
     bool raw_stress = j.get("raw_stress", false).asBool();
+    bool auto_verbalize = j.get("auto_verbalize", true).asBool();
 
     if (j.isMember("audio_base64") && !j.get("audio_base64", "").asString().empty()) {
         callback(json_error(404, "клонування голосу недоступне у C++ (лише Python)")); return;
@@ -247,7 +256,7 @@ void handle_synthesize(const HttpRequestPtr& req,
     if (voice.empty()) { callback(json_error(400, "Невідомий голос: " + voice_name)); return; }
 
     try {
-        auto pcm = g_engine.synthesize_pcm(text, voice, speed, raw_stress);
+        auto pcm = g_engine.synthesize_pcm(text, voice, speed, raw_stress, auto_verbalize);
         auto bytes = holos::wav_bytes(pcm, holos::kSampleRate);
         std::string b64 = drogon::utils::base64Encode(
             reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size());
@@ -256,7 +265,7 @@ void handle_synthesize(const HttpRequestPtr& req,
         resp["sample_rate"] = holos::kSampleRate;
         resp["duration_sec"] = (double)pcm.size() / holos::kSampleRate;
         resp["voice"] = voice;
-        resp["text"] = text;
+        resp["text"] = auto_verbalize ? holos::verbalize(text) : text;
         resp["audio_base64"] = b64;
         callback(HttpResponse::newHttpJsonResponse(resp));
     } catch (const std::exception& e) {
@@ -293,7 +302,8 @@ public:
         std::string text, voice, err;
         float speed = 1.0f;
         bool raw_stress = false;
-        err = validate_synth_cfg(cfg, text, voice, speed, raw_stress);
+        bool auto_verbalize = true;
+        err = validate_synth_cfg(cfg, text, voice, speed, raw_stress, auto_verbalize);
         if (!err.empty()) {
             Json::Value e; e["error"] = err;
             conn->send(Json::writeString(Json::StreamWriterBuilder(), e),
@@ -303,10 +313,10 @@ public:
         }
 
         // Синтез у detached thread, щоб не блокувати event loop.
-        std::thread([conn, text, voice, speed, raw_stress]() {
+        std::thread([conn, text, voice, speed, raw_stress, auto_verbalize]() {
             try {
                 double duration = synth_stream_send(
-                    text, voice, speed, raw_stress,
+                    text, voice, speed, raw_stress, auto_verbalize,
                     [&conn](const int16_t* pcm, size_t n) {
                         std::string bytes(reinterpret_cast<const char*>(pcm), n * 2);
                         conn->send(bytes, drogon::WebSocketMessageType::Binary);
@@ -373,6 +383,13 @@ audio{width:100%;margin-top:.75rem}
 <div class="card">
   <label for="text">Текст</label>
   <textarea id="text" placeholder="Введіть текст для синтезу (мінімум 10 символів)…"></textarea>
+  <div style="margin-top:.75rem;display:flex;gap:.75rem;flex-wrap:wrap;align-items:center">
+    <button id="vbBtn" class="secondary" type="button">Вербалізувати цифри</button>
+    <label style="margin:0;display:flex;align-items:center;gap:.4rem;color:#e6e6e6;font-size:.9rem">
+      <input type="checkbox" id="autoVb" checked> Автовербалізація
+    </label>
+  </div>
+  <div class="status" id="vbStatus"></div>
 </div>
 
 <div class="card">
@@ -419,6 +436,22 @@ async function loadVoices(){
 }
 loadVoices();
 
+$("vbBtn").onclick=async()=>{
+  const text=$("text").value;
+  if(!text.trim()){$("vbStatus").textContent="Введіть текст";$("vbStatus").className="status err";return}
+  $("vbBtn").disabled=true;$("vbStatus").textContent="Вербалізація…";$("vbStatus").className="status";
+  try{
+    const r=await fetch("/api/verbalize",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({text})});
+    const d=await r.json();
+    if(!r.ok){$("vbStatus").textContent=d.detail||("HTTP "+r.status);$("vbStatus").className="status err";return}
+    $("text").value=d.text;
+    $("vbStatus").textContent=d.changed?"Цифри розгорнуто":"Цифр не знайдено";
+    $("vbStatus").className="status ok";
+  }catch(e){$("vbStatus").textContent="Помилка: "+e;$("vbStatus").className="status err"}
+  finally{$("vbBtn").disabled=false}
+};
+
 function b64ToBlob(b64,type="audio/wav"){
   const bin=atob(b64);const arr=new Uint8Array(bin.length);
   for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);
@@ -431,7 +464,7 @@ $("synthBtn").onclick=async()=>{
   $("synthBtn").disabled=true;status("Синтез…");
   try{
     const r=await fetch("/api/synthesize",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({text,voice:$("voice").value,speed:+$("speed").value,format:"wav"})});
+      body:JSON.stringify({text,voice:$("voice").value,speed:+$("speed").value,format:"wav",auto_verbalize:$("autoVb").checked})});
     const d=await r.json();
     if(!r.ok){status(d.detail||("HTTP "+r.status),"err");return}
     lastBlob=b64ToBlob(d.audio_base64);
@@ -467,7 +500,7 @@ $("streamBtn").onclick=()=>{
   $("streamBtn").disabled=true;status("Стрімінг через WebSocket…");
   const ws=new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host+"/api/ws/synthesize");
   const parts=[];let gotFinal=false;
-  ws.onopen=()=>ws.send(JSON.stringify({text,voice:$("voice").value,speed:+$("speed").value}));
+  ws.onopen=()=>ws.send(JSON.stringify({text,voice:$("voice").value,speed:+$("speed").value,auto_verbalize:$("autoVb").checked}));
   ws.onmessage=e=>{
     if(typeof e.data==="string"){
       const d=JSON.parse(e.data);
@@ -501,11 +534,13 @@ int main() {
     std::string vocab = env("HOLOS_VOCAB", models + "/vocab.json");
     std::string voices_json = env("HOLOS_VOICES", models + "/voices.json");
     std::string onnx = env("HOLOS_ONNX", models + "/holos_cpu_int8.onnx");
+    std::string accentor = env("HOLOS_ACCENTOR", models + "/accentor-lite.onnx");
     int threads = env_int("HOLOS_THREADS", 0);
 
     LOG_INFO << "loading models: trie=" << trie << " vocab=" << vocab
-             << " voices=" << voices_json << " onnx=" << onnx;
-    g_engine.load(trie, vocab, voices_json, onnx, threads);
+             << " voices=" << voices_json << " onnx=" << onnx
+             << " accentor=" << accentor;
+    g_engine.load(trie, vocab, voices_json, onnx, accentor, threads);
     LOG_INFO << "models loaded; voices=" << g_engine.voice_names.size()
              << " vocab=" << g_engine.tokenizer.vocab_size();
 
@@ -553,9 +588,16 @@ int main() {
         .registerHandler("/v1/audio/speech", &handle_openai_speech, {Post})
         .registerHandler("/api/synthesize", &handle_synthesize, {Post})
         .registerHandler("/api/verbalize",
-            [](const HttpRequestPtr&, std::function<void(const HttpResponsePtr&)>&& cb) {
-                // Вербалізація (byt5) — Python-only, у C++ немає.
-                cb(json_error(404, "вербалізація недоступна у C++ (лише Python)"));
+            [](const HttpRequestPtr& req, std::function<void(const HttpResponsePtr&)>&& cb) {
+                // Rule-based вербалізація цифр/дат/часу (C++, без нейромоделі).
+                const auto& body = req->getJsonObject();
+                if (!body) { cb(json_error(400, "очікується JSON-тіло")); return; }
+                std::string text = body->get("text", "").asString();
+                std::string out = holos::verbalize(text);
+                Json::Value resp;
+                resp["text"] = out;
+                resp["changed"] = (out != text);
+                cb(HttpResponse::newHttpJsonResponse(resp));
             },
             {Post})
         .run();
