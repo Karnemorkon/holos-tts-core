@@ -13,4 +13,11 @@ if(TARGET holos_core)
   add_executable(test_text_prep test_text_prep.cpp)
   target_link_libraries(test_text_prep PRIVATE holos_core)
   add_test(NAME textprep_golden COMMAND test_text_prep "${CMAKE_CURRENT_SOURCE_DIR}/textprep_golden.json")
+
+  # Golden parity for the CharTokenizer (vs Python CharTokenizer on phonemes).
+  add_executable(test_tokenizer test_tokenizer.cpp)
+  target_link_libraries(test_tokenizer PRIVATE holos_core)
+  add_test(NAME tokenizer_golden COMMAND test_tokenizer
+    "${CMAKE_CURRENT_SOURCE_DIR}/vocab.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tokenizer_golden.json")
 endif()
