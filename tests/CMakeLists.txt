@@ -20,4 +20,10 @@ if(TARGET holos_core)
   add_test(NAME tokenizer_golden COMMAND test_tokenizer
     "${CMAKE_CURRENT_SOURCE_DIR}/vocab.json"
     "${CMAKE_CURRENT_SOURCE_DIR}/tokenizer_golden.json")
+
+  # M1e smoke: повний text->audio ланцюжок (потрібні моделі; не ctest).
+  if(HOLOS_WITH_ORT)
+    add_executable(test_synth test_synth.cpp)
+    target_link_libraries(test_synth PRIVATE holos_core)
+  endif()
 endif()
