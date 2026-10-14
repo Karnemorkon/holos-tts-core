@@ -29,7 +29,7 @@ add_library(holos_core
   src/core/ipa_uk.cpp
 )
 target_include_directories(holos_core PUBLIC src)
-target_link_libraries(holos_core PUBLIC nlohmann_json::nlohmann_json pcre2-8)
+target_link_libraries(holos_core PUBLIC nlohmann_json::nlohmann_json pcre2-8 utf8proc)
 
 find_package(marisa QUIET)
 if(marisa_FOUND)

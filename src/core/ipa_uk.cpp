@@ -1,7 +1,5 @@
 #include "ipa_uk.h"
-
-#define PCRE2_CODE_UNIT_WIDTH 8
-#include <pcre2.h>
+#include "pcre2_util.h"
 
 #include <algorithm>
 #include <cctype>
@@ -16,80 +14,16 @@
 namespace holos::ipa {
 namespace {
 
+using holos::util::re_sub;
+using holos::util::compile;
+using holos::util::Pcre2Ptr;
+
 constexpr const char* kAcute = "\u02C8"; // ˈ  (U+02C8)  -- NOTE: Python ACUTE=U+0301 is input mark; output stress=U+02C8
 // Input accent marks (combining) used in the orthography:
 constexpr const char* kInAcute = "\u0301";
 constexpr const char* kInGrave = "\u0300";
 constexpr const char* kSentinel = "\u2040"; // ⁀ monosyllabic stress sentinel
 constexpr const char* kGraveMark = "\u02CC"; // ˌ output secondary stress
-
-struct Pcre2Deleter { void operator()(pcre2_code* c) const { if (c) pcre2_code_free(c); } };
-using Pcre2Ptr = std::unique_ptr<pcre2_code, Pcre2Deleter>;
-
-Pcre2Ptr compile(const std::string& pattern) {
-    int err = 0; PCRE2_SIZE off = 0;
-    pcre2_code* re = pcre2_compile(reinterpret_cast<PCRE2_SPTR>(pattern.c_str()),
-                                   PCRE2_ZERO_TERMINATED, PCRE2_UTF | PCRE2_UCP,
-                                   &err, &off, nullptr);
-    if (!re) {
-        PCRE2_UCHAR buf[256];
-        pcre2_get_error_message(err, buf, sizeof(buf));
-        throw std::runtime_error("pcre2 compile @" + std::to_string(off) + ": " +
-                                 reinterpret_cast<const char*>(buf));
-    }
-    return Pcre2Ptr(re);
-}
-
-// Appends the replacement for one match. `tmpl` uses $1,$2,.. for groups;
-// a group that did not participate inserts empty (Python re semantics).
-void append_repl(std::string& out, const std::string& tmpl, const std::string& subject,
-                 PCRE2_SIZE* ov, int ngroups) {
-    for (size_t i = 0; i < tmpl.size(); ) {
-        if (tmpl[i] == '$' && i + 1 < tmpl.size() &&
-            std::isdigit(static_cast<unsigned char>(tmpl[i + 1]))) {
-            int g = 0; size_t j = i + 1;
-            while (j < tmpl.size() && std::isdigit(static_cast<unsigned char>(tmpl[j]))) {
-                g = g * 10 + (tmpl[j] - '0'); ++j;
-            }
-            if (g >= 1 && g <= ngroups && ov[2 * g] != PCRE2_UNSET)
-                out.append(subject, ov[2 * g], ov[2 * g + 1] - ov[2 * g]);
-            i = j;
-        } else {
-            out.push_back(tmpl[i]); ++i;
-        }
-    }
-}
-
-std::string re_sub(const std::string& pattern, const std::string& repl,
-                   const std::string& subject) {
-    Pcre2Ptr re = compile(pattern);
-    int ngroups = 0;
-    pcre2_pattern_info(re.get(), PCRE2_INFO_CAPTURECOUNT, &ngroups);
-    pcre2_match_data* md = pcre2_match_data_create_from_pattern(re.get(), nullptr);
-    std::string out; out.reserve(subject.size());
-    PCRE2_SIZE off = 0, len = subject.size();
-    while (off <= len) {
-        int rc = pcre2_match(re.get(), reinterpret_cast<PCRE2_SPTR>(subject.data()),
-                             len, off, 0, md, nullptr);
-        if (rc <= 0) break;
-        PCRE2_SIZE* ov = pcre2_get_ovector_pointer(md);
-        PCRE2_SIZE ms = ov[0], me = ov[1];
-        out.append(subject, off, ms - off);
-        append_repl(out, repl, subject, ov, ngroups);
-        if (me == ms) { // empty match: advance one codepoint to avoid a loop
-            if (me >= len) { off = len + 1; break; }
-            unsigned char c = static_cast<unsigned char>(subject[me]);
-            size_t n = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
-            out.append(subject, me, n);
-            off = me + n;
-        } else {
-            off = me;
-        }
-    }
-    pcre2_match_data_free(md);
-    out.append(subject, off, len - off);
-    return out;
-}
 
 using Rules = std::vector<std::pair<std::string, std::string>>;
 void apply(std::string& s, const Rules& r) { for (auto& [p, x] : r) s = re_sub(p, x, s); }

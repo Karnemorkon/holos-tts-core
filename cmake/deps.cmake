@@ -27,6 +27,14 @@ set(PCRE2_SUPPORT_LIBZ OFF CACHE BOOL "" FORCE)
 set(PCRE2_SUPPORT_LIBREADLINE OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(pcre2)
 
+# utf8proc: Unicode normalization (NFKC) for text prep parity with Python unicodedata.
+FetchContent_Declare(utf8proc
+  GIT_REPOSITORY https://github.com/JuliaStrings/utf8proc.git
+  GIT_TAG v2.9.0)
+set(UTF8PROC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(UTF8PROC_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(utf8proc)
+
 # dr_wav: tiny public-domain WAV reader/writer (used when ORT audio path is on)
 if(HOLOS_WITH_ORT)
   FetchContent_Declare(dr_wav
