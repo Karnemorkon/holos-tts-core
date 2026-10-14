@@ -249,7 +249,8 @@ void handle_synthesize(const HttpRequestPtr& req,
     try {
         auto pcm = g_engine.synthesize_pcm(text, voice, speed, raw_stress);
         auto bytes = holos::wav_bytes(pcm, holos::kSampleRate);
-        std::string b64 = drogon::utils::base64Encode(bytes.data(), bytes.size());
+        std::string b64 = drogon::utils::base64Encode(
+            reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size());
         Json::Value resp;
         resp["format"] = format;
         resp["sample_rate"] = holos::kSampleRate;
@@ -331,6 +332,168 @@ public:
     WS_PATH_LIST_END
 };
 
+// Статичний веб-UI (embedded HTML) — мінімальний аналог Gradio-демо.
+static const char kIndexHtml[] = R"HTML(<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HolosTTS (native C++)</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#0f1115;color:#e6e6e6;min-height:100vh}
+.wrap{max-width:860px;margin:0 auto;padding:2rem 1.25rem}
+h1{font-size:1.5rem;margin:0 0 .25rem}
+.sub{color:#9aa0aa;font-size:.9rem;margin-bottom:1.5rem}
+.card{background:#171a21;border:1px solid #2a2f3a;border-radius:12px;padding:1.25rem;margin-bottom:1rem}
+label{display:block;font-size:.85rem;color:#9aa0aa;margin-bottom:.4rem}
+textarea{width:100%;min-height:110px;background:#0f1115;color:#e6e6e6;border:1px solid #2a2f3a;border-radius:8px;padding:.75rem;font:inherit;resize:vertical}
+select,input[type=range]{width:100%}
+select{background:#0f1115;color:#e6e6e6;border:1px solid #2a2f3a;border-radius:8px;padding:.55rem .6rem;font:inherit}
+.row{display:flex;gap:1rem;flex-wrap:wrap}
+.row>div{flex:1;min-width:180px}
+button{background:#3b82f6;color:#fff;border:0;border-radius:8px;padding:.65rem 1.25rem;font:inherit;font-weight:600;cursor:pointer}
+button:disabled{opacity:.5;cursor:not-allowed}
+button.secondary{background:#2a2f3a}
+audio{width:100%;margin-top:.75rem}
+.status{margin-top:.75rem;font-size:.85rem;color:#9aa0aa;min-height:1.2em}
+.status.err{color:#f87171}
+.status.ok{color:#4ade80}
+.disclaimer{font-size:.78rem;color:#6b7280;line-height:1.5;border-left:3px solid #374151;padding-left:.75rem;margin-top:1.5rem}
+.streambar{height:4px;background:#2a2f3a;border-radius:2px;margin-top:.75rem;overflow:hidden}
+.streambar>div{height:100%;width:0;background:#3b82f6;transition:width .15s}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>HolosTTS — український TTS (native C++)</h1>
+<p class="sub">Drogon HTTP/WS · ONNX Runtime INT8 CPU · API-паритет HolosTTS-hybrid</p>
+
+<div class="card">
+  <label for="text">Текст</label>
+  <textarea id="text" placeholder="Введіть текст для синтезу (мінімум 10 символів)…"></textarea>
+</div>
+
+<div class="card">
+  <div class="row">
+    <div>
+      <label for="voice">Голос</label>
+      <select id="voice"></select>
+    </div>
+    <div>
+      <label for="speed">Швидкість: <span id="speedVal">1.00</span>×</label>
+      <input type="range" id="speed" min="0.25" max="4" step="0.05" value="1">
+    </div>
+  </div>
+  <div style="margin-top:1rem;display:flex;gap:.75rem;flex-wrap:wrap">
+    <button id="synthBtn">Синтезувати</button>
+    <button id="streamBtn" class="secondary">Стрімінг (WS)</button>
+    <button id="dlBtn" class="secondary" disabled>Завантажити WAV</button>
+  </div>
+  <div class="streambar"><div id="sbar"></div></div>
+  <div class="status" id="status"></div>
+  <audio id="player" controls style="display:none"></audio>
+</div>
+
+<div class="disclaimer">
+  <strong>Відмова від відповідальності / Disclaimer</strong><br>
+  <em>UA:</em> Цей проєкт є незалежною аматорською розробкою (нативною C++ обгорткою) і <strong>не є офіційним продуктом</strong> автора оригінальної нейромережі. Він жодним чином не афілійований, не спонсорується і не підтримується розробником <a href="https://github.com/patriotyk" style="color:#60a5fa">patriotyk</a>. Усі права на оригінальні моделі, ваги та препроцес належать їхньому законному автору. Проєкт надається «як є» (as is).<br>
+  <em>EN:</em> This project is an independent, community-driven native C++ wrapper and <strong>is not an official product</strong> of the original neural network creator. It is not affiliated with, endorsed, or sponsored by <a href="https://github.com/patriotyk" style="color:#60a5fa">patriotyk</a>. All rights to the original models and weights belong to their respective owner. The software is provided «as is», without warranty of any kind.
+</div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const status=(m,cls="")=>{const s=$("status");s.textContent=m;s.className="status "+cls};
+let lastBlob=null;
+
+$("speed").oninput=()=>{$("speedVal").textContent=(+$("speed").value).toFixed(2)};
+
+async function loadVoices(){
+  try{
+    const r=await fetch("/api/voices");const d=await r.json();
+    const sel=$("voice");sel.innerHTML="";
+    (d.voices||[]).forEach(v=>{const o=document.createElement("option");o.value=v;o.textContent=v;sel.appendChild(o)});
+  }catch(e){status("Не вдалося завантажити голоси: "+e,"err")}
+}
+loadVoices();
+
+function b64ToBlob(b64,type="audio/wav"){
+  const bin=atob(b64);const arr=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++)arr[i]=bin.charCodeAt(i);
+  return new Blob([arr],{type});
+}
+
+$("synthBtn").onclick=async()=>{
+  const text=$("text").value.trim();
+  if(text.length<10){status("Текст закороткий (мінімум 10 символів)","err");return}
+  $("synthBtn").disabled=true;status("Синтез…");
+  try{
+    const r=await fetch("/api/synthesize",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({text,voice:$("voice").value,speed:+$("speed").value,format:"wav"})});
+    const d=await r.json();
+    if(!r.ok){status(d.detail||("HTTP "+r.status),"err");return}
+    lastBlob=b64ToBlob(d.audio_base64);
+    const url=URL.createObjectURL(lastBlob);
+    const p=$("player");p.src=url;p.style.display="";p.play().catch(()=>{});
+    $("dlBtn").disabled=false;
+    status(`Готово: ${d.duration_sec.toFixed(2)}с · ${d.voice} · 24 kHz`,"ok");
+  }catch(e){status("Помилка: "+e,"err")}
+  finally{$("synthBtn").disabled=false}
+};
+
+$("dlBtn").onclick=()=>{
+  if(!lastBlob)return;
+  const a=document.createElement("a");a.href=URL.createObjectURL(lastBlob);a.download="holos.wav";a.click();
+};
+
+function pcm16ToWav(pcmChunks,sampleRate=24000){
+  let total=0;pcmChunks.forEach(c=>total+=c.length);
+  const buf=new ArrayBuffer(44+total*2);const v=new DataView(buf);
+  const w=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i))};
+  w(0,"RIFF");v.setUint32(4,36+total*2,true);w(8,"WAVE");w(12,"fmt ");
+  v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+  v.setUint32(24,sampleRate,true);v.setUint32(28,sampleRate*2,true);
+  v.setUint16(32,2,true);v.setUint16(34,16,true);w(36,"data");v.setUint32(40,total*2,true);
+  let off=44;
+  for(const c of pcmChunks){new Uint8Array(buf,off,c.length).set(new Uint8Array(c));off+=c.length}
+  return new Blob([buf],{type:"audio/wav"});
+}
+
+$("streamBtn").onclick=()=>{
+  const text=$("text").value.trim();
+  if(text.length<10){status("Текст закороткий (мінімум 10 символів)","err");return}
+  $("streamBtn").disabled=true;status("Стрімінг через WebSocket…");
+  const ws=new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host+"/api/ws/synthesize");
+  const parts=[];let gotFinal=false;
+  ws.onopen=()=>ws.send(JSON.stringify({text,voice:$("voice").value,speed:+$("speed").value}));
+  ws.onmessage=e=>{
+    if(typeof e.data==="string"){
+      const d=JSON.parse(e.data);
+      if(d.error){status("Помилка: "+d.error,"err");ws.close();return}
+      if(d.done){
+        gotFinal=true;
+        const blob=pcm16ToWav(parts,24000);
+        lastBlob=blob;
+        const url=URL.createObjectURL(blob);
+        const p=$("player");p.src=url;p.style.display="";p.play().catch(()=>{});
+        $("dlBtn").disabled=false;
+        status(`Стрімінг готово: ${d.duration_sec.toFixed(2)}с · ${parts.length} чанків · 24 kHz`,"ok");
+        ws.close();
+      }
+    }else{
+      parts.push(e.data);
+      $("sbar").style.width=Math.min(100,parts.length*12)+"%";
+    }
+  };
+  ws.onerror=()=>{status("WebSocket помилка","err");$("streamBtn").disabled=false};
+  ws.onclose=()=>{$("streamBtn").disabled=false;$("sbar").style.width="0"};
+};
+</script>
+</body>
+</html>)HTML";
+
 int main() {
     int port = env_int("HOLOS_PORT", 8004);
     std::string models = env("HOLOS_MODELS_DIR", "/app/models");
@@ -350,6 +513,22 @@ int main() {
         .setLogPath("./")
         .setLogLevel(trantor::Logger::kWarn)
         .addListener("0.0.0.0", port)
+        .registerHandler("/",
+            [](const HttpRequestPtr&, std::function<void(const HttpResponsePtr&)>&& cb) {
+                auto resp = HttpResponse::newHttpResponse();
+                resp->setContentTypeCode(CT_TEXT_HTML);
+                resp->setBody(kIndexHtml);
+                cb(resp);
+            },
+            {Get})
+        .registerHandler("/index.html",
+            [](const HttpRequestPtr&, std::function<void(const HttpResponsePtr&)>&& cb) {
+                auto resp = HttpResponse::newHttpResponse();
+                resp->setContentTypeCode(CT_TEXT_HTML);
+                resp->setBody(kIndexHtml);
+                cb(resp);
+            },
+            {Get})
         .registerHandler("/healthz",
             [](const HttpRequestPtr&, std::function<void(const HttpResponsePtr&)>&& cb) {
                 Json::Value j;
