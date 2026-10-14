@@ -14,6 +14,8 @@ public:
 
     bool has(const std::string& name) const { return map_.count(name) != 0; }
     size_t size() const { return map_.size(); }
+    // Відсортовані імена голосів (для /api/voices).
+    std::vector<std::string> names() const;
     // 256-float ембеддінг голосу; кидає std::out_of_range для невідомого.
     const std::vector<float>& get(const std::string& name) const;
 

@@ -6,6 +6,31 @@
 
 namespace holos {
 
+namespace {
+
+void put_u32(std::vector<char>& b, uint32_t v) {
+    b.push_back(char(v & 0xFF)); b.push_back(char((v >> 8) & 0xFF));
+    b.push_back(char((v >> 16) & 0xFF)); b.push_back(char((v >> 24) & 0xFF));
+}
+void put_u16(std::vector<char>& b, uint16_t v) {
+    b.push_back(char(v & 0xFF)); b.push_back(char((v >> 8) & 0xFF));
+}
+void put_tag(std::vector<char>& b, const char* t) { b.insert(b.end(), t, t + 4); }
+
+// 44-байтний PCM16 mono WAV-заголовок; data_bytes = 0xFFFFFFFF для стрімінгу.
+std::vector<char> wav_header(int sample_rate, uint32_t data_bytes, uint32_t riff_size) {
+    std::vector<char> h;
+    h.reserve(44);
+    put_tag(h, "RIFF"); put_u32(h, riff_size); put_tag(h, "WAVE");
+    put_tag(h, "fmt "); put_u32(h, 16); put_u16(h, 1); put_u16(h, 1);
+    put_u32(h, uint32_t(sample_rate)); put_u32(h, uint32_t(sample_rate) * 2);
+    put_u16(h, 2); put_u16(h, 16);
+    put_tag(h, "data"); put_u32(h, data_bytes);
+    return h;
+}
+
+} // namespace
+
 std::vector<int16_t> float_to_pcm16(const std::vector<float>& chunk) {
     float peak = 0.f;
     for (float v : chunk) peak = std::max(peak, std::fabs(v));
@@ -20,26 +45,22 @@ std::vector<int16_t> float_to_pcm16(const std::vector<float>& chunk) {
     return out;
 }
 
+std::vector<char> wav_bytes(const std::vector<int16_t>& pcm, int sample_rate) {
+    uint32_t data_bytes = uint32_t(pcm.size() * 2);
+    auto h = wav_header(sample_rate, data_bytes, 36 + data_bytes);
+    h.insert(h.end(), reinterpret_cast<const char*>(pcm.data()),
+             reinterpret_cast<const char*>(pcm.data()) + data_bytes);
+    return h;
+}
+
+std::vector<char> wav_stream_header(int sample_rate) {
+    return wav_header(sample_rate, 0xFFFFFFFFu, 0xFFFFFFFFu);
+}
+
 void write_wav(const std::string& path, const std::vector<int16_t>& pcm, int sample_rate) {
+    auto bytes = wav_bytes(pcm, sample_rate);
     std::ofstream f(path, std::ios::binary);
-    uint32_t data_bytes = static_cast<uint32_t>(pcm.size() * 2);
-    uint32_t byte_rate = static_cast<uint32_t>(sample_rate) * 2;
-    uint32_t riff_size = 36 + data_bytes;
-    auto w32 = [&](uint32_t v) {
-        char b[4] = {char(v & 0xFF), char((v >> 8) & 0xFF), char((v >> 16) & 0xFF),
-                     char((v >> 24) & 0xFF)};
-        f.write(b, 4);
-    };
-    auto w16 = [&](uint16_t v) {
-        char b[2] = {char(v & 0xFF), char((v >> 8) & 0xFF)};
-        f.write(b, 2);
-    };
-    f.write("RIFF", 4); w32(riff_size); f.write("WAVE", 4);
-    f.write("fmt ", 4); w32(16); w16(1); w16(1);
-    w32(static_cast<uint32_t>(sample_rate)); w32(byte_rate);
-    w16(2); w16(16);
-    f.write("data", 4); w32(data_bytes);
-    f.write(reinterpret_cast<const char*>(pcm.data()), static_cast<std::streamsize>(data_bytes));
+    f.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
 }
 
 } // namespace holos

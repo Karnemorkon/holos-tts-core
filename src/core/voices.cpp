@@ -2,6 +2,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <fstream>
 #include <stdexcept>
 
@@ -20,6 +21,14 @@ Voices Voices::load(const std::string& json_path) {
         v.map_[name] = arr.get<std::vector<float>>();
     }
     return v;
+}
+
+std::vector<std::string> Voices::names() const {
+    std::vector<std::string> out;
+    out.reserve(map_.size());
+    for (auto& [name, _] : map_) out.push_back(name);
+    std::sort(out.begin(), out.end());
+    return out;
 }
 
 const std::vector<float>& Voices::get(const std::string& name) const {
