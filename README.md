@@ -64,6 +64,55 @@ pip install huggingface_hub
 python3 scripts/download_models.py --out models
 ```
 
+## Швидкий старт
+
+Кроки від нуля до працюючого сервера (потрібні Docker та ~2.1 ГБ на моделі).
+
+**1. Завантажити моделі** (~2.1 ГБ, один раз):
+
+```bash
+pip install huggingface_hub
+python3 scripts/download_models.py --out models
+```
+
+**2. Запустити сервер** — один із варіантів:
+
+```bash
+# варіант A: образ з Docker Hub (рекомендовано)
+docker run -d -p 8004:8004 -v $PWD/models:/app/models:ro \
+    --name holos-core morkon06/holostts-core:latest
+
+# варіант B: збірка з джерела
+docker compose up -d --build
+```
+
+**3. Перевірити:**
+
+```bash
+curl localhost:8004/healthz
+# -> {"engine":"holos-tts-core-native","status":"ok","verbalizer":"neural+rule",...}
+
+# Web-UI: відкрити http://localhost:8004/ у браузері
+```
+
+**4. Перший синтез** (WAV-файл `out.wav`):
+
+```bash
+curl -s -X POST localhost:8004/api/synthesize \
+    -H "Content-Type: application/json" \
+    -d '{"text":"Привіт, світе! Це тест синтезу мовлення українською.","voice":"Speaker_43"}' \
+    | python3 -c "import sys,json,base64; open('out.wav','wb').write(base64.b64decode(json.load(sys.stdin)['audio_base64']))"
+```
+
+**Нотатки:**
+
+- Нейро-дефолт тримає ~1.7 ГБ RSS у простої (+70 МБ під час генерації) —
+  давайте контейнеру ліміт ≥2 ГБ. Rule-only (без neural-вербалізатора):
+  `-e HOLOS_VERBALIZER_DIR=""` → ~468 МБ.
+- Голос за замовчуванням core-API: `Speaker_0` (hybrid використовує
+  `Speaker_84`); повний список — `GET /api/voices`.
+- Запуск нативного бінарника (без Docker) — див. розділ «Запуск сервера» нижче.
+
 ## Залежності
 
 | Залежність | Призначення | Спосіб |
