@@ -66,27 +66,31 @@ python3 scripts/download_models.py --out models
 
 ## Швидкий старт
 
-Кроки від нуля до працюючого сервера (потрібні Docker та ~2.1 ГБ на моделі).
+Кроки від нуля до працюючого сервера (потрібен Docker; ~2.1 ГБ на моделі).
 
-**1. Завантажити моделі** (~2.1 ГБ, один раз):
-
-```bash
-pip install huggingface_hub
-python3 scripts/download_models.py --out models
-```
-
-**2. Запустити сервер** — один із варіантів:
+**1. Запустити** — один із варіантів:
 
 ```bash
-# варіант A: образ з Docker Hub (рекомендовано)
+# варіант A: з джерела — моделі завантажуються АВТОМАТИЧНО
+docker compose up -d --build
+
+# варіант B: образ з Docker Hub — моделі завантажити вручну
+pip install huggingface_hub && python3 scripts/download_models.py --out models
 docker run -d -p 8004:8004 -v $PWD/models:/app/models:ro \
     --name holos-core morkon06/holostts-core:latest
-
-# варіант B: збірка з джерела
-docker compose up -d --build
 ```
 
-**3. Перевірити:**
+Перший `docker compose up -d` сам завантажує моделі (~2.1 ГБ, публічний HF,
+без токена) у named volume `holos_core_models` і запускає сервер одразу після
+завершення; подальші старти — миттєві (skipped, якщо моделі вже на місці).
+Примусове перезавантаження:
+
+```bash
+docker compose run --rm downloader \
+    python3 scripts/download_models.py --out models --force
+```
+
+**2. Перевірити:**
 
 ```bash
 curl localhost:8004/healthz
@@ -95,7 +99,7 @@ curl localhost:8004/healthz
 # Web-UI: відкрити http://localhost:8004/ у браузері
 ```
 
-**4. Перший синтез** (WAV-файл `out.wav`):
+**3. Перший синтез** (WAV-файл `out.wav`):
 
 ```bash
 curl -s -X POST localhost:8004/api/synthesize \
@@ -208,15 +212,15 @@ per-request).
 (companion: `morkon06/holostts-hybrid`).
 
 ```bash
-# з локального джерела
-docker compose up -d --build          # моделі: ./models (див. download_models.py)
+# з локального джерела: моделі автовантаження у named volume holos_core_models
+docker compose up -d --build
 
-# з Docker Hub
-docker run -p 8004:8004 -v $PWD/models:/app/models:ro morkon06/holostts-core:latest
+# з Docker Hub: див. «Швидкий старт», варіант B (моделі вручну у ./models)
 ```
 
-Моделі монтуються volume'ом на `/app/models`. Багато-архітектурна збірка
-(amd64+arm64) — надалі.
+Моделі живуть у named volume `holos_core_models` (монтуються на `/app/models`);
+сервіс `downloader` у compose завантажує їх перед стартом сервера (ідемпотентно).
+Багато-архітектурна збірка (amd64+arm64) — надалі.
 
 ## Структура
 

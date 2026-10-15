@@ -45,15 +45,32 @@ def main() -> int:
     ap.add_argument("--out", default=DEFAULT_OUT)
     ap.add_argument("--repo", default=DEFAULT_REPO)
     ap.add_argument("--token", default=os.environ.get("HF_TOKEN", ""))
+    ap.add_argument("--force", action="store_true",
+                    help="re-download even if models are already present")
     args = ap.parse_args()
+
+    os.makedirs(args.out, exist_ok=True)
+
+    # Ідемпотентність (compose auto-init): якщо всі файли вже на місці — виходимо.
+    required = list(FLAT_MAP.values()) + [
+        "verbalizer/onnx-int8/config.json",
+        "verbalizer/onnx-int8/decoder_model_quantized.onnx",
+        "verbalizer/onnx-int8/decoder_with_past_model_quantized.onnx",
+        "verbalizer/onnx-int8/encoder_model_quantized.onnx",
+        "verbalizer/onnx-int8/sentencepiece.bpe.model",
+    ]
+    if not args.force and all(
+        os.path.isfile(p := os.path.join(args.out, f)) and os.path.getsize(p) > 0
+        for f in required
+    ):
+        print(f"Models already present in {args.out} — skip download (--force to redo).")
+        return 0
 
     try:
         from huggingface_hub import snapshot_download
     except ImportError:
         print("ERROR: huggingface_hub not installed. Run: pip install huggingface_hub", file=sys.stderr)
         return 1
-
-    os.makedirs(args.out, exist_ok=True)
 
     print(f"Downloading {args.repo} -> {args.out} ...")
     cache_dir = os.path.join(args.out, ".hf_cache")
