@@ -26,4 +26,14 @@ if(TARGET holos_core)
     add_executable(test_synth test_synth.cpp)
     target_link_libraries(test_synth PRIVATE holos_core)
   endif()
+
+  # Neural verbalizer golden (vs Python ONNX); skip (77) якщо моделі недоступні.
+  if(HOLOS_WITH_VERBALIZER)
+    add_executable(test_verbalizer_neural test_verbalizer_neural.cpp)
+    target_link_libraries(test_verbalizer_neural PRIVATE holos_core)
+    add_test(NAME verbalizer_neural_golden COMMAND test_verbalizer_neural
+      "${CMAKE_CURRENT_SOURCE_DIR}/verbalizer_neural_golden.tsv"
+      "${HOLOS_TEST_VERBALIZER_DIR}")
+    set_tests_properties(verbalizer_neural_golden PROPERTIES SKIP_RETURN_CODE 77)
+  endif()
 endif()
