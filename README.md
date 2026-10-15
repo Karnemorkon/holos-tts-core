@@ -1,16 +1,20 @@
 # holos-tts-core
 
-C++ native core for **HolosTTS** (Ukrainian text-to-speech). Етап 3 ТЗ: заміна
-Python-сервісу легшим C++ ядром з API-паритетом.
+[![CI](https://github.com/Karnemorkon/holos-tts-core/actions/workflows/ci.yml/badge.svg)](https://github.com/Karnemorkon/holos-tts-core/actions/workflows/ci.yml)
 
-> **Статус: M4+ (ядро готове).** Реалізовано повний пайплайн:
-> препроцес → **нейро-вербалізація (M2M100 ONNX int8)** → словниковий стрес
-> → ipa_uk фонемізація → токенізація → ORT-генерація → PCM/WAV, плюс
-> Drogon HTTP/WS сервер на `:8004` з паритетом API і OpenAI `/v1/audio/speech`.
+C++ native core для **HolosTTS** (український text-to-speech). Етап 3 ТЗ:
+заміна Python-сервісу легшим C++ ядром з API-паритетом.
+
+> **Статус: ядро готове до роботи (M6).** Повний пайплайн: препроцес →
+> нейро-вербалізація (M2M100 ONNX int8) → стрес (словник marisa-trie +
+> нейро-фолбек accentor) → ipa_uk фонемізація → токенізація → ORT-генерація →
+> PCM/WAV. Drogon HTTP/WS сервер на `:8004` з API-паритетом hybrid та
+> OpenAI `/v1/audio/speech`. Тривалість аудіо збігається з
+> `HolosTTS-hybrid` до **≤0.02 с**; neural-вербалізація — **дослівний паритет**.
 
 ## Цілі (ТЗ Етап 3)
 
-- RAM ≤ 400 МБ (проти ~1.5 ГБ у Python)
+- RAM ≤ 400 МБ (проти ~1.5 ГБ у Python) — rule-only конфіг: 468 МБ
 - Cold start < 0.3 с, **Time-To-First-Byte ≤ 200 мс**
 - API-паритет із `Karnemorkon/HolosTTS-hybrid` (Wyoming-проксі без змін)
 - Автономна збірка без Python (Linux; Windows/Android NDK — надалі)
@@ -18,20 +22,24 @@ Python-сервісу легшим C++ ядром з API-паритетом.
 ## Архітектура пайплайну
 
 ```
-текст → препроцес → вербалізація(M2M100 ONNX int8 або rule) → стрес(словник marisa-trie)
-      → фонемізація(ipa_uk) → токенізація → генерація(ONNX/ORT) → PCM/WAV
+текст → препроцес → вербалізація (M2M100 ONNX int8 або rule)
+      → стрес (словник marisa-trie → neural accentor-фолбек для OOV)
+      → фонемізація (ipa_uk) → токенізація → генерація (ONNX/ORT) → PCM/WAV
 ```
 
-**Стрес — словниковий, без нейро (варіант A).** `stress.trie` (marisa-trie)
-дає 98.7% словникових форм з одним наголосом за мікросекунди. ByT5 на CPU мав
-6–17 с/речення і поступається точністю — відхилено.
+**Стрес — словниковий + neural фолбек.** `stress.trie` (marisa-trie, 2.9М
+ключів) покриває більшість форм за мікросекунди. Слова поза словником
+(або неоднозначні, варіант A: skip) обробляє **accentor-lite** — LSTM
+експортований в ONNX (single-file, ~1.2 МБ), той самий `ukrainian_accentor`,
+що й у Python-конвеєрі. Unicode-регістр слова нормалізується utf8proc
+(паритет з Python `word.lower()/title()`).
 
 **Вербалізація — два режими** (`auto_verbalize`):
 
-| Режим | Реалізація | Латентність | Якість (EXACT vs Python) |
+| Режим | Реалізація | Латентність | Якість |
 |---|---|---|---|
-| `neural` (типово) | M2M100-630M-distilled, ONNX int8, KV-cache | ~4 с на речення (CPU) | 87% EXACT / 93% NORMALIZED |
-| `rule` | C++ регулярки (цифри/дати/час) | мілісекунди | базовий |
+| `neural` (типово) | M2M100-630M-distilled, ONNX int8, KV-cache | ~3–4 с на речення (CPU) | дослівний паритет з hybrid (4/4 MATCH) |
+| `rule` | C++ регулярки (цифри/дати/час) | мілісекунди | базовий (граматика відмінювання гірша за neural) |
 | `off` / `false` | текст як є | 0 | — |
 
 Legacy bool `auto_verbalize: true` → `neural`, `false` → `off`.
@@ -46,7 +54,7 @@ Legacy bool `auto_verbalize: true` → `neural`, `false` → `off`.
 | TTS ONNX int8 + vocab + voices | `tts/` | генерація аудіо |
 | Neural verbalizer (M2M100 ONNX int8) | `verbalizer/onnx-int8/` | цифри→слова (якість) |
 | Neural verbalizer (CT2 int8) | `verbalizer/ct2-int8/` | той самий, CTranslate2 |
-| Accentor (ONNX) | `accentor/` | нейро-фолбек наголосу |
+| Accentor (ONNX, single-file) | `accentor/` | нейро-фолбек наголосу |
 | Stress trie | `stress/stress.trie` | словниковий наголос |
 
 Завантаження одним скриптом (розкладка під `HOLOS_MODELS_DIR`):
@@ -60,12 +68,12 @@ python3 scripts/download_models.py --out models
 
 | Залежність | Призначення | Спосіб |
 |---|---|---|
-| ONNX Runtime 1.31 | генерація аудіо + neural verbalizer | prebuilt tarball |
-| CTranslate2 | (опційно) CT2-вербалізація | FetchContent |
-| sentencepiece | токенізатор M2M100 | FetchContent |
+| ONNX Runtime 1.31 | генерація аудіо + neural verbalizer + accentor | prebuilt tarball |
+| sentencepiece | токенізатор M2M100 | apt (`libsentencepiece-dev`) |
 | marisa-trie | словник наголосів | FetchContent |
+| utf8proc, pcre2, nlohmann_json, dr_wav | Unicode/regex/JSON/WAV | FetchContent |
 | Drogon | HTTP/WS сервер | FetchContent |
-| nlohmann_json, dr_wav | утиліти | FetchContent |
+| CTranslate2 | (опційно) CT2-вербалізація | FetchContent |
 
 ## Збірка
 
@@ -85,6 +93,8 @@ ctest --test-dir build -R verbalizer_neural
 ```
 
 Золотий тест пропускається (exit 77), якщо `HOLOS_TEST_VERBALIZER_DIR` не задано.
+CI (ubuntu-24.04) збирає конфіг `ORT=ON, SERVER=OFF` і проганяє golden-тести
+без моделей.
 
 ## Запуск сервера
 
@@ -113,30 +123,51 @@ export HOLOS_VERBALIZER_DIR=$PWD/models/verbalizer/onnx-int8   # або "" дл�
   відповідь містить `text` (оригінал), `verbalized_text`, `audio_base64` (WAV)
 - `POST /api/verbalize` — `{text, mode?: "neural"|"rule"}`; вербалізація без синтезу
 - `POST /v1/audio/speech` — OpenAI-сумісний ендпоінт (streaming підтримується)
-- `WS /api/synthesize/stream` — чанковий стрім PCM16
+- `WS /api/ws/synthesize` — чанковий стрім PCM16
 - `GET /` — UI (dropdown автовербалізації: neural/rule/off)
 
 `auto_verbalize`: `"neural"` (типово) | `"rule"` | `"off" | false | true` (legacy).
+
+### Паритет з hybrid (виміряно, voice=Speaker_43)
+
+| Текст | hybrid | core | Δ |
+|---|---|---|---|
+| «Привіт, світе! Це тест синтезу мовлення українською.» | 3.60 с | 3.62 с | +0.02 |
+| «Купив 25 машин 12 березня 2025 року о 14:30…» | 8.07 с | 8.07 с | 0.00 |
+| «Загальна вартість становить 12 450 гривень…» | 7.55 с | 7.55 с | 0.00 |
+| «Науково-дослідний інститут працює над проєктом уже три роки.» | 4.22 с | 4.22 с | 0.00 |
+
+Neural-вербалізація: 4/4 дослівних збігів з hybrid. Відомі відмінності:
+`/api/voices` віддає відсортований список (hybrid — порядок `voices.pt`);
+rule-вербалізатор гірше відмінює («дванадцять березня» замість «дванадцятого»).
 
 ### Бенчмарк (Xeon, 9 потоків, warm)
 
 | Конфіг | RSS | TTFB `/api/synthesize` (теплий) | neural verbalize |
 |---|---|---|---|
-| neural (default) | **1.65 ГБ** | ~0.52–0.95 с | ~3.4–4.1 с/речення |
-| rule-only (`HOLOS_VERBALIZER_DIR=""`) | **468 МБ** | ~0.51–0.84 с | — (мс) |
+| neural (default) | **1.65 ГБ** | ~0.5–1.4 с | ~3–4 с/речення |
+| rule-only (`HOLOS_VERBALIZER_DIR=""`) | **468 МБ** | ~0.5–0.8 с | — (мс) |
 
-M2M100-630M int8 додає ~1.2 ГБ RSS — свідомий trade-off «якість за замовчуванням».
-Для RAM-constrained деплоїв запускайте з порожнім `HOLOS_VERBALIZER_DIR`
-(вербалізація rule, UI дозволяє перемикати режими per-request).
+M2M100-630M int8 додає ~1.2 ГБ RSS — свідомий trade-off «якість за
+замовчуванням». Для RAM-constrained деплоїв запускайте з порожнім
+`HOLOS_VERBALIZER_DIR` (вербалізація rule, UI дозволяє перемикати режими
+per-request).
 
 ### Docker
 
+Опублікований образ: **[`morkon06/holostts-core`](https://hub.docker.com/r/morkon06/holostts-core)**
+(companion: `morkon06/holostts-hybrid`).
+
 ```bash
-docker build -f docker/Dockerfile -t holos-tts-core:local .
+# з локального джерела
+docker compose up -d --build          # моделі: ./models (див. download_models.py)
+
+# з Docker Hub
+docker run -p 8004:8004 -v $PWD/models:/app/models:ro morkon06/holostts-core:latest
 ```
 
 Моделі монтуються volume'ом на `/app/models`. Багато-архітектурна збірка
-(amd64+arm64 → Docker Hub `morkon06/holostts-core`) — M3.
+(amd64+arm64) — надалі.
 
 ## Структура
 
@@ -156,11 +187,17 @@ docker/        multi-stage Dockerfile
 - **M0** ✅ каркас: CMake, словниковий стрес-модуль, Dockerfile
 - **M1** ✅ ядро: препроцес, ipa_uk, токенізатор, ORT-синтез, CLI
 - **M2** ✅ сервер: Drogon HTTP/WS, стрім, OpenAI-ендпоінт, UI
-- **M3** (частково) Docker; CI/бенчі/RAM — у Фазі 6+
+- **M3** ✅ Docker: multi-stage образ, compose, HF download script, Docker Hub
 - **M4** ✅ neural verbalizer: M2M100 ONNX int8 (KV-cache, greedy), golden 30/30
 - **M5** ✅ API-інтеграція: `auto_verbalize: neural|rule|off`, default neural
+- **M6** ✅ паритет стресу: accentor single-file ONNX (відновлено втрачений
+  external-data експорт), Unicode lower/title, UTF-8-safe вставка U+0301;
+  тривалість аудіо Δ ≤ 0.02 с vs hybrid
+
+Надалі: граматика rule-вербалізатора, порядок `/api/voices`, CT2-вербалізація,
+мульті-архітектурні образи.
 
 ## Ліцензія
 
 MIT. Моделі та `stress.trie` належать їх авторам (див. `patriotyk/*`,
-`ukrainian-word-stress`, M2M100 Helsinki-NLP).
+`ukrainian-word-stress`, `ukrainian_accentor`, M2M100 Helsinki-NLP).
