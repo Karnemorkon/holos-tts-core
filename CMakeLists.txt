@@ -84,6 +84,14 @@ if(HOLOS_WITH_SERVER)
   add_subdirectory(server)
 endif()
 
+# --- install (Docker runtime image) -----------------------------------------
+include(GNUInstallDirs)
+install(TARGETS holos-cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+if(HOLOS_WITH_SERVER)
+  install(TARGETS holos-server RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+# ONNX Runtime shared libs для runtime-образу (копіюються у Dockerfile з /opt/ort).
+
 # --- tests ------------------------------------------------------------------
 if(HOLOS_BUILD_TESTS)
   enable_testing()

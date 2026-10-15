@@ -1,0 +1,60 @@
+# holos-tts-core: C++ native TTS server (:8004), API-parity with HolosTTS-hybrid.
+#
+# Models: download first (host side):
+#   pip install huggingface_hub
+#   python3 scripts/download_models.py --out models
+# then bind-mount ./models -> /app/models (see volumes below), or use the
+# holos_models_cache volume + `docker compose run --rm downloader`.
+#
+# Rule-only (no neural verbalizer, ~468 MB RSS instead of ~1.65 GB):
+#   set HOLOS_VERBALIZER_DIR="" (empty) in environment.
+
+services:
+  holos-core:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: holos-tts-core:latest
+    container_name: holos-core
+    ports:
+      - "8004:8004"
+    environment:
+      - HOLOS_MODELS_DIR=/app/models
+      # neural (default) | rule | off — також перемикається per-request через UI/API
+      - HOLOS_VERBALIZER_DIR=/app/models/verbalizer/onnx-int8
+      - HOLOS_PORT=8004
+    volumes:
+      - ./models:/app/models:ro
+    deploy:
+      resources:
+        limits:
+          cpus: "12.0"
+          memory: 3g
+    memswap_limit: 3g
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8004/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    restart: unless-stopped
+
+  # One-shot: populate named volume with models from HF (alternative to bind mount).
+  #   docker compose run --rm downloader
+  # then switch holos-core volume to `holos_core_models:/app/models` if preferred.
+  downloader:
+    image: python:3.11-slim
+    profiles: ["tools"]
+    working_dir: /work
+    environment:
+      - HF_HOME=/work/.hf_cache
+    volumes:
+      - .:/work
+    command: >
+      sh -c "pip install -q huggingface_hub &&
+             python3 scripts/download_models.py --out models"

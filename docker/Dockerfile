@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake ninja-build git ca-certificates curl \
         pkg-config zlib1g-dev libssl-dev uuid-dev libcares2-dev \
         libmp3lame-dev libvorbis-dev libogg-dev \
+        libsentencepiece-dev \
         python3 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -33,13 +34,14 @@ RUN set -eux; \
 WORKDIR /src
 COPY . .
 
-# Build (CT2/server off by default in M0; flip when ready)
+# Build: full native core (ORT + server + neural verbalizer).
 RUN cmake -S . -B build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DHOLOS_FETCH_DEPS=ON \
         -DHOLOS_WITH_ORT=ON \
         -DHOLOS_WITH_CT2=OFF \
-        -DHOLOS_WITH_SERVER=OFF \
+        -DHOLOS_WITH_SERVER=ON \
+        -DHOLOS_WITH_VERBALIZER=ON \
         -DHOLOS_BUILD_TESTS=OFF \
         -DHOLOS_ORT_ROOT=/opt/ort \
     && cmake --build build --parallel \
@@ -51,7 +53,7 @@ RUN cmake -S . -B build -G Ninja \
 FROM ubuntu:24.04 AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libgomp1 libmp3lame0 libvorbis0a libvorbisenc2 libogg0 ca-certificates \
+        libgomp1 libmp3lame0 libvorbis0a libvorbisenc2 libogg0 ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/holos /opt/holos
@@ -61,8 +63,10 @@ ENV PATH="/opt/holos/bin:${PATH}"
 ENV LD_LIBRARY_PATH="/opt/holos/lib:${LD_LIBRARY_PATH}"
 
 # Models are mounted at runtime (volume holos_models_cache -> /app/models).
+# HOLOS_VERBALIZER_DIR: neural verbalizer (M2M100 ONNX int8); empty -> rule-only.
 ENV HOLOS_MODELS_DIR=/app/models
+ENV HOLOS_VERBALIZER_DIR=/app/models/verbalizer/onnx-int8
+ENV HOLOS_PORT=8004
 EXPOSE 8004
 
-ENTRYPOINT ["holos-cli"]
-CMD ["version"]
+ENTRYPOINT ["holos-server"]
