@@ -35,11 +35,12 @@ int char_id(uint32_t cp) {
     }
 }
 
-// UTF-8 lowercase для кирилиці (а-я, А-Я -> а-я); інше залишаємо.
+// UTF-8 lowercase для кирилиці/латиниці; решта — без змін (як Python word.lower()).
 uint32_t utf8_lower(uint32_t cp) {
-    if (cp >= 0x0410 && cp <= 0x042F) return cp + 0x20;
-    if (cp == 0x0401) return 0x0451; // Ё -> ё
-    if (cp == 0x0400) return 0x0450; // Ѐ -> ѐ
+    if (cp >= 'A' && cp <= 'Z') return cp + 0x20;
+    if (cp >= 0x0410 && cp <= 0x042F) return cp + 0x20; // А-Я -> а-я
+    if (cp >= 0x0400 && cp <= 0x040F) return cp + 0x50; // Ѐ-Џ -> ѐ-џ (Ё,Є,І,Ї)
+    if (cp == 0x0490) return 0x0491;                     // Ґ -> ґ
     return cp;
 }
 
@@ -115,13 +116,20 @@ std::string Accentor::stress(std::string_view word) const {
         }
         if (pos > cp_len) pos = cp_len; // кліпінг до кінця слова
 
-        // Знайти байт-позицію codepoint з індексом pos.
+        // Знайти байт-позицію ПОЧАТКУ codepoint з індексом pos.
+        // Проходимо по символах (а не по байтах), інакше U+0301 може
+        // вставитись всередину 2-байтового символу і зламати UTF-8.
         size_t byte_pos = 0;
         int cp_idx = 0;
         while (byte_pos < word.size() && cp_idx < pos) {
             unsigned char ch = static_cast<unsigned char>(word[byte_pos]);
-            if ((ch & 0xC0) != 0x80) cp_idx++;
-            byte_pos++;
+            size_t adv = 1;
+            if ((ch & 0xE0) == 0xC0) adv = 2;
+            else if ((ch & 0xF0) == 0xE0) adv = 3;
+            else if ((ch & 0xF8) == 0xF0) adv = 4;
+            if (adv > word.size() - byte_pos) adv = 1; // битий UTF-8
+            byte_pos += adv;
+            cp_idx++;
         }
 
         std::string out;

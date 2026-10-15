@@ -4,13 +4,52 @@
 #include <marisa/trie.h>
 #include <marisa/agent.h>
 
+#include <utf8proc.h>
+
 #include <algorithm>
-#include <cctype>
 #include <stdexcept>
 
 namespace holos {
 
 namespace {
+
+// Unicode lower: як Python word.lower() (кирилиця, латиниця тощо).
+std::string unicode_lower(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    size_t i = 0;
+    while (i < s.size()) {
+        utf8proc_int32_t cp = 0;
+        auto n = utf8proc_iterate(reinterpret_cast<const utf8proc_uint8_t*>(s.data()) + i,
+                                  static_cast<utf8proc_ssize_t>(s.size() - i), &cp);
+        if (n <= 0) { out.push_back(s[i]); ++i; continue; } // битий байт
+        out += utf8::encode_u32(static_cast<uint32_t>(utf8proc_tolower(cp)));
+        i += static_cast<size_t>(n);
+    }
+    return out;
+}
+
+// Unicode title: як Python word.title() — після не-літери верхній регістр,
+// решта — нижній.
+std::string unicode_title(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    size_t i = 0;
+    bool boundary = true;
+    while (i < s.size()) {
+        utf8proc_int32_t cp = 0;
+        auto n = utf8proc_iterate(reinterpret_cast<const utf8proc_uint8_t*>(s.data()) + i,
+                                  static_cast<utf8proc_ssize_t>(s.size() - i), &cp);
+        if (n <= 0) { out.push_back(s[i]); ++i; boundary = true; continue; }
+        auto lc = utf8proc_tolower(cp);
+        auto uc = utf8proc_toupper(cp);
+        const bool cased = (lc != uc);
+        out += utf8::encode_u32(static_cast<uint32_t>((cased && boundary) ? uc : lc));
+        boundary = !cased;
+        i += static_cast<size_t>(n);
+    }
+    return out;
+}
 constexpr char kTrieSep = '\xFF'; // роздільник word/payload у BytesTrie
 constexpr char kRecSep  = '\xFF'; // Record-separator тегів
 constexpr char kPosSep  = '\xFE'; // POS-separator тегів
@@ -63,10 +102,9 @@ size_t StressDictionary::size() const { return impl_ ? impl_->trie.num_keys() : 
 
 std::vector<int> StressDictionary::accent_positions(std::string_view word) const {
     if (!impl_ || word.empty()) return {};
-    // Python пробує base, base.lower(), base.title()
-    std::string lower(word), title(word);
-    for (auto& c : lower) if ((unsigned char)c < 0x80) c = char(::tolower(c));
-    if (!title.empty() && (unsigned char)title[0] < 0x80) title[0] = char(::toupper(title[0]));
+    // Python пробує base, base.lower(), base.title() (Unicode-регістр)
+    const std::string lower = unicode_lower(word);
+    const std::string title = unicode_title(word);
 
     const std::string candidates[3] = { std::string(word), lower, title };
     for (const std::string& w : candidates) {
