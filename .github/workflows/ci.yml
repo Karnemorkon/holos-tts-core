@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  ORT_VERSION: "1.31.0"
+
 jobs:
   build:
     name: build (${{ matrix.os }})
@@ -24,15 +27,34 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build pkg-config zlib1g-dev libssl-dev uuid-dev
+            ninja-build pkg-config zlib1g-dev libssl-dev uuid-dev \
+            libsentencepiece-dev
+
+      - name: Cache ONNX Runtime
+        id: ort-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/ort
+          key: ort-${{ env.ORT_VERSION }}-linux-x64
+
+      - name: Install ONNX Runtime
+        if: steps.ort-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o /tmp/ort.tgz \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"
+          mkdir -p "$HOME/ort"
+          tar -xzf /tmp/ort.tgz -C "$HOME/ort" --strip-components=1
+          rm /tmp/ort.tgz
 
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DHOLOS_FETCH_DEPS=ON \
-            -DHOLOS_WITH_ORT=OFF \
+            -DHOLOS_WITH_ORT=ON \
+            -DHOLOS_ORT_ROOT="$HOME/ort" \
             -DHOLOS_WITH_CT2=OFF \
+            -DHOLOS_WITH_VERBALIZER=ON \
             -DHOLOS_WITH_SERVER=OFF \
             -DHOLOS_BUILD_TESTS=ON
 
