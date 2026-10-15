@@ -14,7 +14,8 @@ ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake ninja-build git ca-certificates curl \
-        pkg-config zlib1g-dev libssl-dev uuid-dev libcares2-dev \
+        pkg-config zlib1g-dev libssl-dev uuid-dev libc-ares-dev \
+        libjsoncpp-dev \
         libmp3lame-dev libvorbis-dev libogg-dev \
         libsentencepiece-dev \
         python3 \
@@ -54,6 +55,7 @@ FROM ubuntu:24.04 AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 libmp3lame0 libvorbis0a libvorbisenc2 libogg0 ca-certificates curl \
+        libsentencepiece0 libcares2 libjsoncpp25 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/holos /opt/holos
