@@ -15,6 +15,7 @@
 #include <json/json.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <memory>
@@ -38,6 +39,23 @@ int env_int(const char* k, int def) {
     return v && *v ? std::atoi(v) : def;
 }
 
+// Інструментування латентності (TTFB/RTF). Типово ВИМКНЕНО (прод-режим):
+// HOLOS_METRICS=1 -> лог [metrics] на запит + timings у відповідях/заголовках.
+bool g_metrics = env_int("HOLOS_METRICS", 0) != 0;
+
+using Clock = std::chrono::steady_clock;
+const auto g_start = Clock::now();
+
+double ms_since(Clock::time_point t) {
+    return std::chrono::duration<double, std::milli>(Clock::now() - t).count();
+}
+
+struct Timings {
+    double vb_ms = 0, phon_ms = 0, ort_ms = 0, encode_ms = 0;
+    double ttfb_ms = -1, total_ms = 0;
+    int parts = 0;
+};
+
 // OpenAI-імена голосів -> мапінг на пресети (як _pick_voice у Python).
 const char* kOpenAIVoices[] = {"alloy", "echo", "fable", "onyx", "nova", "shimmer"};
 
@@ -60,6 +78,55 @@ VbMode parse_vb_mode(const Json::Value& j) {
         if (s == "off" || s == "false" || s == "0" || s == "none") return VbMode::Off;
     }
     return VbMode::Neural;
+}
+
+const char* vb_mode_name(VbMode m) {
+    switch (m) {
+        case VbMode::Off: return "off";
+        case VbMode::Rule: return "rule";
+        default: return "neural";
+    }
+}
+
+void log_metrics(const char* api, VbMode mode, const Timings& t, double audio_sec) {
+    if (!g_metrics) return;
+    const double rtf = (t.total_ms > 0 && audio_sec > 0)
+        ? (t.total_ms / 1000.0) / audio_sec : 0.0;
+    LOG_INFO << "[metrics] api=" << api << " mode=" << vb_mode_name(mode)
+             << " parts=" << t.parts
+             << " vb_ms=" << (long long)std::llround(t.vb_ms)
+             << " phon_ms=" << (long long)std::llround(t.phon_ms)
+             << " ort_ms=" << (long long)std::llround(t.ort_ms)
+             << " encode_ms=" << (long long)std::llround(t.encode_ms)
+             << " ttfb_ms=" << (long long)std::llround(t.ttfb_ms)
+             << " total_ms=" << (long long)std::llround(t.total_ms)
+             << " audio_s=" << audio_sec
+             << " rtf=" << rtf;
+}
+
+Json::Value timings_json(const Timings& t) {
+    Json::Value j;
+    j["parts"] = t.parts;
+    j["vb_ms"] = t.vb_ms;
+    j["phon_ms"] = t.phon_ms;
+    j["ort_ms"] = t.ort_ms;
+    j["encode_ms"] = t.encode_ms;
+    j["ttfb_ms"] = t.ttfb_ms;
+    j["total_ms"] = t.total_ms;
+    return j;
+}
+
+void add_timing_headers(const HttpResponsePtr& resp, const Timings& t, double audio_sec) {
+    if (!g_metrics) return;
+    auto add = [&resp](const char* name, double v) {
+        resp->addHeader(name, std::to_string((long long)std::llround(v)));
+    };
+    add("X-Holos-Timing-Vb-Ms", t.vb_ms);
+    add("X-Holos-Timing-Phon-Ms", t.phon_ms);
+    add("X-Holos-Timing-Ort-Ms", t.ort_ms);
+    add("X-Holos-Timing-Total-Ms", t.total_ms);
+    if (audio_sec > 0)
+        resp->addHeader("X-Holos-Rtf", std::to_string(t.total_ms / 1000.0 / audio_sec));
 }
 
 std::string apply_verbalize(VbMode m, const std::string& text) {
@@ -114,18 +181,31 @@ struct Engine {
 
     // Повний синтез (глобальна пікова нормалізація) -> PCM16.
     // vb_mode: розгорнути цифри/дати/час перед фонемізацією.
+    // tm/vtext_out: опційне інструментування та розгорнутий текст (metrics).
     std::vector<int16_t> synthesize_pcm(const std::string& text, const std::string& voice,
                                         float speed, bool raw_stress,
-                                        VbMode vb_mode = VbMode::Neural) {
+                                        VbMode vb_mode = VbMode::Neural,
+                                        Timings* tm = nullptr,
+                                        std::string* vtext_out = nullptr) {
+        auto t_vb = Clock::now();
         std::string t = apply_verbalize(vb_mode, text);
+        if (vtext_out) *vtext_out = t;
+        if (tm) tm->vb_ms = ms_since(t_vb);
         const auto& v = voices.get(voice);
         std::vector<float> audio;
         {
             std::lock_guard<std::mutex> lk(infer_mu);
-            for (const auto& p : phonemizer->phonemize(t, raw_stress)) {
+            auto t_phon = Clock::now();
+            auto parts = phonemizer->phonemize(t, raw_stress);
+            if (tm) { tm->phon_ms = ms_since(t_phon); tm->parts = (int)parts.size(); }
+            double ort = 0.0;
+            for (const auto& p : parts) {
+                auto t_ort = Clock::now();
                 auto chunk = synth->generate(tokenizer(p), v.data(), speed);
+                ort += ms_since(t_ort);
                 audio.insert(audio.end(), chunk.begin(), chunk.end());
             }
+            if (tm) tm->ort_ms = ort;
         }
         return holos::float_to_pcm16(audio);
     }
@@ -181,16 +261,32 @@ std::string validate_synth_cfg(const Json::Value& j, std::string& text, std::str
 
 // Синтез по частинах + відправлення PCM16-чанків через колбек (спільний для stream/WS).
 // Повертає duration_sec. Колбек: (const int16_t* pcm, size_t n) -> bool (false = стоп).
+// tm: опційне інструментування (TTFB = час до першого готового чанка).
 template <typename SendFn>
 double synth_stream_send(const std::string& text, const std::string& voice, float speed,
-                         bool raw_stress, VbMode vb_mode, SendFn&& send_chunk) {
+                         bool raw_stress, VbMode vb_mode, SendFn&& send_chunk,
+                         Timings* tm = nullptr) {
+    auto t0 = Clock::now();
     std::string t = apply_verbalize(vb_mode, text);
+    if (tm) tm->vb_ms = ms_since(t0);
     double duration = 0.0;
-    for (const auto& p : g_engine.phonemize(t, raw_stress)) {
+    auto t_phon = Clock::now();
+    auto parts = g_engine.phonemize(t, raw_stress);
+    if (tm) { tm->phon_ms = ms_since(t_phon); tm->parts = (int)parts.size(); }
+    double ort = 0.0;
+    bool first = true;
+    for (const auto& p : parts) {
+        auto t_ort = Clock::now();
         auto pcm = g_engine.synth_part_pcm(p, voice, speed);
+        ort += ms_since(t_ort);
         duration += (double)pcm.size() / holos::kSampleRate;
+        if (first) {
+            if (tm) tm->ttfb_ms = ms_since(t0);
+            first = false;
+        }
         if (!send_chunk(pcm.data(), pcm.size())) break;
     }
+    if (tm) { tm->ort_ms = ort; tm->total_ms = ms_since(t0); }
     return duration;
 }
 
@@ -223,19 +319,30 @@ void handle_openai_speech(const HttpRequestPtr& req,
     }
 
     if (!stream) {
+        Timings tm;
+        auto t_req = Clock::now();
         try {
-            auto pcm = g_engine.synthesize_pcm(input, voice, speed, raw_stress, vb_mode);
+            auto pcm = g_engine.synthesize_pcm(input, voice, speed, raw_stress, vb_mode, &tm);
+            const double audio_sec = (double)pcm.size() / holos::kSampleRate;
             if (response_format == "wav") {
+                auto t_enc = Clock::now();
                 auto bytes = holos::wav_bytes(pcm, holos::kSampleRate);
+                tm.encode_ms = ms_since(t_enc);
+                tm.total_ms = ms_since(t_req);
                 auto resp = HttpResponse::newHttpResponse();
                 resp->addHeader("Content-Type", "audio/wav");
+                add_timing_headers(resp, tm, audio_sec);
                 resp->setBody(std::string(bytes.begin(), bytes.end()));
+                log_metrics("/v1/audio/speech", vb_mode, tm, audio_sec);
                 callback(resp);
             } else { // pcm
+                tm.total_ms = ms_since(t_req);
                 auto resp = HttpResponse::newHttpResponse();
                 resp->setContentTypeCode(CT_APPLICATION_OCTET_STREAM);
+                add_timing_headers(resp, tm, audio_sec);
                 resp->setBody(std::string(reinterpret_cast<const char*>(pcm.data()),
                                           pcm.size() * 2));
+                log_metrics("/v1/audio/speech", vb_mode, tm, audio_sec);
                 callback(resp);
             }
         } catch (const std::exception& e) {
@@ -249,17 +356,20 @@ void handle_openai_speech(const HttpRequestPtr& req,
     auto resp = HttpResponse::newAsyncStreamResponse(
         [input, voice, speed, raw_stress, vb_mode, is_wav](ResponseStreamPtr stream) {
             std::thread([stream = std::move(stream), input, voice, speed, raw_stress, vb_mode, is_wav]() mutable {
+                Timings tm;
                 try {
                     if (is_wav) {
                         auto hdr = holos::wav_stream_header(holos::kSampleRate);
                         if (!stream->send(std::string(hdr.begin(), hdr.end())))
                             { stream->close(); return; }
                     }
-                    synth_stream_send(input, voice, speed, raw_stress, vb_mode,
+                    double audio_sec = synth_stream_send(input, voice, speed, raw_stress, vb_mode,
                         [&stream](const int16_t* pcm, size_t n) {
                             std::string bytes(reinterpret_cast<const char*>(pcm), n * 2);
                             return stream->send(bytes);
-                        });
+                        },
+                        &tm);
+                    log_metrics("/v1/audio/speech", vb_mode, tm, audio_sec);
                 } catch (...) {}
                 stream->close();
             }).detach();
@@ -294,21 +404,29 @@ void handle_synthesize(const HttpRequestPtr& req,
     std::string voice = g_engine.pick_voice(voice_name);
     if (voice.empty()) { callback(json_error(400, "Невідомий голос: " + voice_name)); return; }
 
+    Timings tm;
+    auto t_req = Clock::now();
     try {
-        // Вербалізуємо один раз; синтезуємо вже розгорнутий текст.
-        std::string vtext = apply_verbalize(vb_mode, text);
-        auto pcm = g_engine.synthesize_pcm(vtext, voice, speed, raw_stress, VbMode::Off);
+        // Вербалізуємо/синтезуємо; vtext — розгорнутий текст для відповіді.
+        std::string vtext;
+        auto pcm = g_engine.synthesize_pcm(text, voice, speed, raw_stress, vb_mode, &tm, &vtext);
+        const double audio_sec = (double)pcm.size() / holos::kSampleRate;
+        auto t_enc = Clock::now();
         auto bytes = holos::wav_bytes(pcm, holos::kSampleRate);
         std::string b64 = drogon::utils::base64Encode(
             reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size());
+        tm.encode_ms = ms_since(t_enc);
+        tm.total_ms = ms_since(t_req);
         Json::Value resp;
         resp["format"] = format;
         resp["sample_rate"] = holos::kSampleRate;
-        resp["duration_sec"] = (double)pcm.size() / holos::kSampleRate;
+        resp["duration_sec"] = audio_sec;
         resp["voice"] = voice;
         resp["text"] = text;
         resp["verbalized_text"] = vtext;
         resp["audio_base64"] = b64;
+        if (g_metrics) resp["timings"] = timings_json(tm);
+        log_metrics("/api/synthesize", vb_mode, tm, audio_sec);
         callback(HttpResponse::newHttpJsonResponse(resp));
     } catch (const std::exception& e) {
         callback(json_error(500, e.what()));
@@ -356,6 +474,7 @@ public:
 
         // Синтез у detached thread, щоб не блокувати event loop.
         std::thread([conn, text, voice, speed, raw_stress, vb_mode]() {
+            Timings tm;
             try {
                 double duration = synth_stream_send(
                     text, voice, speed, raw_stress, vb_mode,
@@ -363,11 +482,14 @@ public:
                         std::string bytes(reinterpret_cast<const char*>(pcm), n * 2);
                         conn->send(bytes, drogon::WebSocketMessageType::Binary);
                         return true;
-                    });
+                    },
+                    &tm);
                 Json::Value fin;
                 fin["done"] = true;
                 fin["sample_rate"] = holos::kSampleRate;
                 fin["duration_sec"] = std::round(duration * 1000.0) / 1000.0;
+                if (g_metrics) fin["timings"] = timings_json(tm);
+                log_metrics("/api/ws/synthesize", vb_mode, tm, duration);
                 conn->send(Json::writeString(Json::StreamWriterBuilder(), fin),
                            drogon::WebSocketMessageType::Text);
             } catch (const std::exception& e) {
@@ -590,6 +712,9 @@ int main() {
     g_engine.load(trie, vocab, voices_json, onnx, accentor, threads);
     LOG_INFO << "models loaded; voices=" << g_engine.voice_names.size()
              << " vocab=" << g_engine.tokenizer.vocab_size();
+    if (g_metrics)
+        LOG_INFO << "[startup] engine loaded +"
+                 << (long long)std::llround(ms_since(g_start)) << "ms";
 
 #ifdef HOLOS_WITH_VERBALIZER
     {
@@ -606,6 +731,10 @@ int main() {
         }
     }
 #endif
+
+    if (g_metrics)
+        LOG_INFO << "[startup] ready to listen +"
+                 << (long long)std::llround(ms_since(g_start)) << "ms";
 
     app()
         .setLogPath("./")

@@ -167,6 +167,8 @@ export HOLOS_VERBALIZER_DIR=$PWD/models/verbalizer/onnx-int8   # або "" дл�
 | `HOLOS_ACCENTOR` | `$MODELS/accentor-lite.onnx` | нейро-фолбек наголосу |
 | `HOLOS_VERBALIZER_DIR` | `""` (rule-only) | neural verbalizer; порожній = rule |
 | `HOLOS_PORT` | `8004` | HTTP-порт |
+| `HOLOS_THREADS` | автo | потоки ONNX Runtime (0 = авто) |
+| `HOLOS_METRICS` | `0` | `1` = `[metrics]` логи + `timings` у відповідях (для бенчів; у проді лишати 0) |
 
 ### API (паритет HolosTTS-hybrid)
 
@@ -194,17 +196,33 @@ Neural-вербалізація: 4/4 дослівних збігів з hybrid. 
 `/api/voices` віддає відсортований список (hybrid — порядок `voices.pt`);
 rule-вербалізатор гірше відмінює («дванадцять березня» замість «дванадцятого»).
 
-### Бенчмарк (Xeon, 9 потоків, warm)
+### Бенчмарк (Xeon 16 ядер, `HOLOS_THREADS=9`, теплий старт, медіана з 3)
 
-| Конфіг | RSS | TTFB `/api/synthesize` (теплий) | neural verbalize |
-|---|---|---|---|
-| neural (default) | **1.65 ГБ** | ~0.5–1.4 с | ~3–4 с/речення |
-| rule-only (`HOLOS_VERBALIZER_DIR=""`) | **468 МБ** | ~0.5–0.8 с | — (мс) |
+Cold start (процес → `healthz` 200): **~13.7 с** — engine (trie + TTS ONNX +
+accentor) ~8.0 с, neural verbalizer (M2M100) ~5.6 с; rule-only ≈ 8 с.
 
-M2M100-630M int8 додає ~1.2 ГБ RSS — свідомий trade-off «якість за
-замовчуванням». Для RAM-constrained деплоїв запускайте з порожнім
-`HOLOS_VERBALIZER_DIR` (вербалізація rule, UI дозволяє перемикати режими
-per-request).
+| Текст | Режим | Частин | TTFB, мс (stream / WS) | total, мс | Аудіо, с | RTF | vb, мс | ort, мс |
+|---|---|---|---|---|---|---|---|---|
+| короткий, без цифр (18) | rule | 1 | 573 / 748 | 576 | 1.38 | 0.42 | 0 | 570 |
+| короткий, без цифр (18) | neural | 1 | 579 / 748 | 588 | 1.38 | 0.43 | 0 | 583 |
+| середній, без цифр (86) | rule | 1 | 2785 / 2617 | 2105 | 6.12 | 0.34 | 0 | 2086 |
+| цифри/дата (82) | rule | 1 | 4382 / 3089 | 3858 | 9.07 | 0.43 | 0 | 3827 |
+| цифри/дата (82) | neural | 1 | 8254 / 8209 | 8554 | 8.72 | 0.98 | 4939 | 3773 |
+| довгий (340, 2 частини) | rule | 2 | 6020 / 6081 | 8518 | 24.98 | 0.34 | 0 | 8451 |
+| довгий (340, 2 частини) | neural | 2 | 18148 / 17646 | 20402 | 25.20 | 0.81 | 11789 | 8610 |
+
+- `TTFB` — `/v1/audio/speech` (stream) та `WS /api/ws/synthesize`; `total` — `/api/synthesize`.
+- Neural-вербалізація працює лише на текстах із цифрами (гейт `has_digits`); без цифр neural ≡ rule.
+- TTFB = час до першого чанка ≈ синтез першої частини (~100 символів) — тому для довгих
+  текстів це секунди. RTF власне ORT ≈ 0.34–0.43; цифрові тексти в neural додають vb ~5–12 с.
+- Цілі ТЗ (TTFB ≤ 200 мс, RTF < 0.25) на CPU не досягнуті — потрібні дрібніший стрімінг
+  і оптимізації ORT (окремий етап).
+- RSS: neural **1.65 ГБ**, rule-only (`HOLOS_VERBALIZER_DIR=""`) **468 МБ** — M2M100-630M
+  int8 свідомо обмінюється на якість.
+
+Відтворення: `HOLOS_METRICS=1 ./build/server/holos-server` +
+`python3 scripts/bench_latency.py --url http://127.0.0.1:8004 --runs 3`
+(markdown-таблиця + JSON; `--cold-container` для заміру cold start у Docker).
 
 ### Docker
 

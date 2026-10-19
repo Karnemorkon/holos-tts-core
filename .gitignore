@@ -27,3 +27,6 @@ voices.json
 *.mp3
 __pycache__/
 .DS_Store
+
+# Runtime logs
+drogon.*.log
