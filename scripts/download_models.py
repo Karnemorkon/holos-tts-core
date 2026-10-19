@@ -7,7 +7,11 @@ Lays files out to match holos-server defaults (HOLOS_MODELS_DIR layout):
   models/voices.json
   models/holos_cpu_int8.onnx
   models/accentor-lite.onnx
+  models/voice_encoder.onnx
   models/verbalizer/gemma-int8/...
+
+Only files missing locally are fetched (adding a new model to the repo does
+not re-download the rest); --force re-downloads everything.
 
 Usage:
   python3 scripts/download_models.py [--out DIR] [--repo REPO] [--patterns P ...]
@@ -32,6 +36,7 @@ FLAT_MAP = {
     "tts/voices.json": "voices.json",
     "tts/holos_cpu_int8.onnx": "holos_cpu_int8.onnx",
     "accentor/accentor-lite.onnx": "accentor-lite.onnx",
+    "tts/voice_encoder.onnx": "voice_encoder.onnx",
 }
 
 # Keep directory structure
@@ -60,50 +65,58 @@ def main() -> int:
     if args.with_m2m100:
         tree_prefixes.update(M2M100_PREFIX)
 
-    # Ідемпотентність (compose auto-init): якщо всі файли вже на місці — виходимо.
-    vb = os.path.join(args.out, "verbalizer/gemma-int8")
-    has_model = os.path.isfile(os.path.join(vb, "model.onnx"))
-    required = list(FLAT_MAP.values()) + [
-        "verbalizer/gemma-int8/config.json",
-        "verbalizer/gemma-int8/model.onnx",
-        "verbalizer/gemma-int8/tokenizer.model",
-    ]
-    if args.with_m2m100:
-        required.append("verbalizer/onnx-int8/encoder_model_quantized.onnx")
-    if not args.force and has_model and all(
-        os.path.isfile(p := os.path.join(args.out, f)) and os.path.getsize(p) > 0
-        for f in required
-    ):
-        print(f"Models already present in {args.out} — skip download (--force to redo).")
-        return 0
-
     try:
-        from huggingface_hub import snapshot_download
+        from huggingface_hub import list_repo_files, snapshot_download
     except ImportError:
         print("ERROR: huggingface_hub not installed. Run: pip install huggingface_hub", file=sys.stderr)
         return 1
 
-    print(f"Downloading {args.repo} -> {args.out} ...")
+    def local_relpath(src_rel: str) -> str | None:
+        if src_rel in FLAT_MAP:
+            return FLAT_MAP[src_rel]
+        for src_prefix, dst_prefix in tree_prefixes.items():
+            if src_rel.startswith(src_prefix + "/"):
+                return os.path.join(dst_prefix, src_rel[len(src_prefix) + 1:])
+        return None
+
+    remote_files = list_repo_files(args.repo, token=args.token or None)
+    wanted: list[str] = []
+    for src_rel in FLAT_MAP:
+        if src_rel in remote_files:
+            wanted.append(src_rel)
+        else:
+            print(f"  MISSING in repo: {src_rel}", file=sys.stderr)
+    for prefix in tree_prefixes:
+        wanted += sorted(f for f in remote_files if f.startswith(prefix + "/"))
+
+    # Ідемпотентність (compose auto-init): тягнемо лише те, чого немає локально.
+    missing = []
+    for src_rel in wanted:
+        dst = os.path.join(args.out, local_relpath(src_rel))
+        if args.force or not (os.path.isfile(dst) and os.path.getsize(dst) > 0):
+            missing.append(src_rel)
+
+    if not missing:
+        print(f"Models already present in {args.out} — skip download (--force to redo).")
+        return 0
+
+    print(f"Downloading {len(missing)} missing file(s) from {args.repo} -> {args.out} ...")
     cache_dir = os.path.join(args.out, ".hf_cache")
-    patterns = [
-        "stress/stress.trie",
-        "tts/vocab.json",
-        "tts/voices.json",
-        "tts/holos_cpu_int8.onnx",
-        "accentor/accentor-lite.onnx",
-    ] + [f"{p}/*" for p in tree_prefixes]
     snapshot_download(
         args.repo,
         local_dir=cache_dir,
         token=args.token or None,
-        allow_patterns=patterns,
+        allow_patterns=missing,
     )
 
-    def move(src_rel: str, dst_rel: str) -> None:
+    import shutil
+
+    def move(src_rel: str) -> None:
+        dst_rel = local_relpath(src_rel)
         src = os.path.join(cache_dir, src_rel)
         dst = os.path.join(args.out, dst_rel)
         if not os.path.exists(src):
-            print(f"  MISSING in repo: {src_rel}", file=sys.stderr)
+            print(f"  MISSING after download: {src_rel}", file=sys.stderr)
             return
         os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
         if os.path.exists(dst):
@@ -112,28 +125,10 @@ def main() -> int:
         size_mb = os.path.getsize(dst) / 1e6
         print(f"  {dst_rel}  ({size_mb:.1f} MB)")
 
-    for src_rel, dst_rel in FLAT_MAP.items():
-        move(src_rel, dst_rel)
+    for src_rel in missing:
+        if not src_rel.endswith(".lock"):
+            move(src_rel)
 
-    for src_prefix, dst_prefix in tree_prefixes.items():
-        src_root = os.path.join(cache_dir, src_prefix)
-        if not os.path.isdir(src_root):
-            print(f"  MISSING dir in repo: {src_prefix}/", file=sys.stderr)
-            continue
-        for root, _dirs, files in os.walk(src_root):
-            for f in files:
-                if f.endswith(".lock"):
-                    continue
-                src_abs = os.path.join(root, f)
-                rel = os.path.relpath(src_abs, cache_dir)
-                dst_abs = os.path.join(args.out, dst_prefix, os.path.relpath(src_abs, src_root))
-                os.makedirs(os.path.dirname(dst_abs), exist_ok=True)
-                if os.path.exists(dst_abs):
-                    os.remove(dst_abs)
-                os.replace(src_abs, dst_abs)
-                print(f"  {os.path.relpath(dst_abs, args.out)}  ({os.path.getsize(dst_abs)/1e6:.1f} MB)")
-
-    import shutil
     shutil.rmtree(cache_dir, ignore_errors=True)
 
     print("\nDone. Launch server with:")

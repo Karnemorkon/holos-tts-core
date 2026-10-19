@@ -25,6 +25,25 @@ if(TARGET holos_core)
   if(HOLOS_WITH_ORT)
     add_executable(test_synth test_synth.cpp)
     target_link_libraries(test_synth PRIVATE holos_core)
+
+    # WAV decode/resample (без моделей).
+    add_executable(test_audio_io test_audio_io.cpp)
+    target_link_libraries(test_audio_io PRIVATE holos_core)
+    add_test(NAME audio_io COMMAND test_audio_io)
+
+    # Декод/ресемпл універсальний; + native npy roundtrip (без моделей).
+    add_executable(test_custom_voices test_custom_voices.cpp)
+    target_link_libraries(test_custom_voices PRIVATE holos_core)
+    add_test(NAME custom_voices COMMAND test_custom_voices
+      "${CMAKE_CURRENT_SOURCE_DIR}/voice_npy_fixture.npy")
+
+    # Golden-тест voice encoder (порівняння з Python ONNX); skip (77) без моделі.
+    add_executable(test_voice_encoder test_voice_encoder.cpp)
+    target_link_libraries(test_voice_encoder PRIVATE holos_core)
+    add_test(NAME voice_encoder_golden COMMAND test_voice_encoder
+      "${CMAKE_CURRENT_SOURCE_DIR}/voice_encoder_golden.txt"
+      "${HOLOS_TEST_VOICE_ENCODER}")
+    set_tests_properties(voice_encoder_golden PROPERTIES SKIP_RETURN_CODE 77)
   endif()
 
   # Neural verbalizer golden (vs Python ONNX); skip (77) якщо моделі недоступні.

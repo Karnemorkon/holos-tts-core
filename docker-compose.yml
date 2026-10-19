@@ -1,10 +1,13 @@
 # holos-tts-core: C++ native TTS server (:8004), API-parity with HolosTTS-hybrid.
 #
-# Models: auto-downloaded on first `docker compose up -d` (HF, ~1.6 GB, public
+# Models: auto-downloaded on first `docker compose up -d` (HF, ~0.6 GB, public
 # repo, no token) into the holos_core_models volume; subsequent starts are
-# instant (downloader skips when files are present).
+# instant (downloader fetches only missing files).
 #   force re-download: docker compose run --rm downloader python3 scripts/download_models.py --out models --force
 #   legacy M2M100 verbalizer: add --with-m2m100
+#
+# Cloned voices (UI): persisted in the holos_core_speakers volume (speakers/*.npy,
+# numpy-compatible with HolosTTS-hybrid); models volume stays read-only.
 #
 # Rule-only (no neural verbalizer, ~468 MB RSS instead of ~1.1 GB):
 #   set HOLOS_VERBALIZER_DIR="" (empty) in environment.
@@ -23,8 +26,11 @@ services:
       # neural (default) | rule | off — також перемикається per-request через UI/API
       - HOLOS_VERBALIZER_DIR=/app/models/verbalizer/gemma-int8
       - HOLOS_PORT=8004
+      # клоновані голоси (speakers/*.npy), writable volume
+      - HOLOS_SPEAKERS_DIR=/app/speakers
     volumes:
       - holos_core_models:/app/models:ro
+      - holos_core_speakers:/app/speakers
     depends_on:
       downloader:
         condition: service_completed_successfully
@@ -64,3 +70,5 @@ services:
 volumes:
   holos_core_models:
     name: holos_core_models
+  holos_core_speakers:
+    name: holos_core_speakers

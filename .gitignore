@@ -30,3 +30,6 @@ __pycache__/
 
 # Runtime logs
 drogon.*.log
+
+# HF downloader cache (compose bind-mount)
+.hf_cache/

@@ -26,6 +26,9 @@ set(HOLOS_TEST_VERBALIZER_DIR "" CACHE PATH "onnx-int8 verbalizer models dir for
 # Каталог моделей для golden-тесту Gemma-вербалізатора (порожній -> тест skip).
 set(HOLOS_TEST_VERBALIZER_GEMMA_DIR "" CACHE PATH "gemma int8 verbalizer models dir for golden test")
 
+# voice_encoder.onnx для golden-тесту клонування (порожній -> тест skip).
+set(HOLOS_TEST_VOICE_ENCODER "" CACHE PATH "voice_encoder.onnx path for golden test")
+
 include(cmake/deps.cmake)
 
 # --- core library -----------------------------------------------------------
@@ -47,8 +50,9 @@ else()
 endif()
 
 if(HOLOS_WITH_ORT)
-  target_sources(holos_core PRIVATE src/core/phonemize.cpp src/core/synth.cpp src/core/voices.cpp src/core/audio.cpp src/core/accentor.cpp)
+  target_sources(holos_core PRIVATE src/core/phonemize.cpp src/core/synth.cpp src/core/voices.cpp src/core/audio.cpp src/core/accentor.cpp src/core/audio_io.cpp src/core/voice_encoder.cpp)
   target_compile_definitions(holos_core PUBLIC HOLOS_WITH_ORT=1)
+  target_link_libraries(holos_core PRIVATE dr_wav)
   if(HOLOS_ORT_ROOT)
     target_include_directories(holos_core PUBLIC ${HOLOS_ORT_ROOT}/include ${HOLOS_ORT_ROOT}/include/onnxruntime/core/session)
     target_link_directories(holos_core PUBLIC ${HOLOS_ORT_ROOT}/lib)
@@ -57,7 +61,8 @@ if(HOLOS_WITH_ORT)
 endif()
 
 # Rule-based verbalizer (digits/dates/time -> Ukrainian words); no external deps.
-target_sources(holos_core PRIVATE src/core/verbalizer.cpp)
+# Кастомні (клоновані) голоси — speakers/*.npy, сумісно з hybrid.
+target_sources(holos_core PRIVATE src/core/verbalizer.cpp src/core/custom_voices.cpp)
 
 # Neural verbalizer (M2M100 ONNX int8 + SentencePiece) — паритет якості з Python CT2.
 if(HOLOS_WITH_VERBALIZER)

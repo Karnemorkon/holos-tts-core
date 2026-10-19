@@ -3,6 +3,8 @@
 #include <drogon/WebSocketController.h>
 
 #include "core/audio.h"
+#include "core/audio_io.h"
+#include "core/custom_voices.h"
 #include "core/phonemize.h"
 #include "core/synth.h"
 #include "core/tokenizer.h"
@@ -10,6 +12,7 @@
 #ifdef HOLOS_WITH_VERBALIZER
 #include "core/verbalizer_neural.h"
 #endif
+#include "core/voice_encoder.h"
 #include "core/voices.h"
 
 #include <json/json.h>
@@ -150,28 +153,58 @@ struct Engine {
     holos::Voices voices;
     holos::CharTokenizer tokenizer;
     std::unique_ptr<holos::Synthesizer> synth;
+    std::unique_ptr<holos::VoiceEncoder> encoder; // клонування (може бути вимкнено)
+    std::unique_ptr<holos::CustomVoices> custom;  // speakers/*.npy (як hybrid)
     std::mutex infer_mu; // серіалізуємо фонемізацію+синтез (як _INFER_LOCK)
+    std::mutex clone_mu; // серіалізуємо енролмент (пікові буфери енкодера)
     std::vector<std::string> voice_names;
 
     void load(const std::string& trie, const std::string& vocab,
               const std::string& voices_json, const std::string& onnx,
-              const std::string& accentor, int threads) {
+              const std::string& accentor, const std::string& voice_encoder,
+              const std::string& speakers_dir, int threads) {
         phonemizer = std::make_unique<holos::Phonemizer>(trie, accentor);
         voices = holos::Voices::load(voices_json);
         tokenizer = holos::CharTokenizer::from_vocab_json(vocab);
         synth = std::make_unique<holos::Synthesizer>(onnx, threads);
+        encoder = std::make_unique<holos::VoiceEncoder>(voice_encoder, threads);
+        custom = std::make_unique<holos::CustomVoices>(speakers_dir);
         voice_names = voices.names();
     }
 
-    // Мапінг voice-імені (пресет або OpenAI-імʼя) -> пресет; порожній = невідомий.
+    bool cloning_ready() const {
+        return encoder && encoder->ready() && custom && custom->enabled();
+    }
+
+    // Мапінг voice-імені (пресет, кастомний голос або OpenAI-імʼя) -> дійсне імʼя.
+    // Порожній = невідомий.
     std::string pick_voice(const std::string& name) const {
         if (name.empty()) return voice_names.empty() ? "" : voice_names.front();
         if (voices.has(name)) return name;
+        if (custom && custom->has(name)) return name;
         for (int i = 0; i < 6; ++i) {
             if (name == kOpenAIVoices[i])
                 return voice_names[size_t(i) % voice_names.size()];
         }
         return ""; // невідомий
+    }
+
+    // 256-float ембеддінг голосу (копія): пресет або кастомний.
+    std::vector<float> voice_embedding(const std::string& name) const {
+        if (voices.has(name)) return voices.get(name);
+        if (custom && custom->has(name)) return custom->get(name);
+        throw std::out_of_range("невідомий голос: " + name);
+    }
+
+    // Список: пресети (у порядку voices.json), потім кастомні (сортовані).
+    std::vector<std::string> all_voice_names() const {
+        std::vector<std::string> all = voice_names;
+        if (custom) {
+            for (auto& n : custom->names())
+                if (std::find(all.begin(), all.end(), n) == all.end())
+                    all.push_back(n);
+        }
+        return all;
     }
 
     std::vector<std::string> phonemize(const std::string& text, bool raw_stress) {
@@ -191,7 +224,7 @@ struct Engine {
         std::string t = apply_verbalize(vb_mode, text);
         if (vtext_out) *vtext_out = t;
         if (tm) tm->vb_ms = ms_since(t_vb);
-        const auto& v = voices.get(voice);
+        const auto v = voice_embedding(voice); // копія: безпечно щодо lifetime/рескану
         std::vector<float> audio;
         {
             std::lock_guard<std::mutex> lk(infer_mu);
@@ -213,7 +246,7 @@ struct Engine {
     // Одна фонемна частина -> float аudio (для стрімінгу; per-chunk нормалізація).
     std::vector<int16_t> synth_part_pcm(const std::string& phonemes, const std::string& voice,
                                         float speed) {
-        const auto& v = voices.get(voice);
+        const auto v = voice_embedding(voice);
         std::lock_guard<std::mutex> lk(infer_mu);
         auto audio = synth->generate(tokenizer(phonemes), v.data(), speed);
         return holos::float_to_pcm16(audio);
@@ -223,6 +256,14 @@ struct Engine {
 Engine g_engine;
 
 bool valid_speed(float s) { return s >= 0.25f && s <= 4.0f; }
+
+// Обрізання пробілів (як name.strip() у hybrid save_voice).
+std::string trim(const std::string& s) {
+    const size_t b = s.find_first_not_of(" \t\n\r\f\v");
+    if (b == std::string::npos) return "";
+    const size_t e = s.find_last_not_of(" \t\n\r\f\v");
+    return s.substr(b, e - b + 1);
+}
 
 // Валідація тексту (як _validate_text).
 bool validate_text(const std::string& t, std::string& err) {
@@ -397,7 +438,9 @@ void handle_synthesize(const HttpRequestPtr& req,
     VbMode vb_mode = parse_vb_mode(j);
 
     if (j.isMember("audio_base64") && !j.get("audio_base64", "").asString().empty()) {
-        callback(json_error(404, "клонування голосу недоступне у C++ (лише Python)")); return;
+        callback(json_error(404, "audio_base64 у /api/synthesize не підтримується: "
+                                 "збережіть голос через POST /api/voices, потім вкажіть його у voice"));
+        return;
     }
     if (format != "wav") { callback(json_error(400, "format: у C++ підтримується лише wav")); return; }
     if (!valid_speed(speed)) { callback(json_error(400, "speed мусить бути в діапазоні 0.25-4.0")); return; }
@@ -431,6 +474,111 @@ void handle_synthesize(const HttpRequestPtr& req,
     } catch (const std::exception& e) {
         callback(json_error(500, e.what()));
     }
+}
+
+// /api/voices (POST) — зберегти клонований голос: {name, audio_base64(WAV)}.
+// Аудіо декодується (будь-яка частота/формат WAV) -> 24k -> voice_encoder -> 256.
+void handle_voices_save(const HttpRequestPtr& req,
+                        std::function<void(const HttpResponsePtr&)>&& callback) {
+    if (!g_engine.cloning_ready()) {
+        callback(json_error(503, "клонування голосу вимкнено (немає voice_encoder.onnx)"));
+        return;
+    }
+    const auto& body = req->getJsonObject();
+    if (!body) { callback(json_error(400, "очікується JSON-тіло")); return; }
+    const Json::Value& j = *body;
+
+    const std::string name = trim(j.get("name", "").asString());
+    if (name.empty()) { callback(json_error(400, "очікується name")); return; }
+    if (!holos::CustomVoices::valid_name(name)) {
+        callback(json_error(
+            400, "Некоректна назва голосу: 1-40 символів (літери/цифри/пробіл/або _-)"));
+        return;
+    }
+    if (g_engine.voices.has(name)) {
+        callback(json_error(400, "Назва збігається з пресетом: " + name));
+        return;
+    }
+    const std::string b64 = j.get("audio_base64", "").asString();
+    if (b64.empty()) {
+        callback(json_error(400, "очікується audio_base64 (WAV)"));
+        return;
+    }
+    const std::string raw = drogon::utils::base64Decode(b64);
+    if (raw.empty()) { callback(json_error(400, "некоректний base64")); return; }
+
+    // Один енролмент за раз: пікові буфери енкодера великі (attention 2400²),
+    // паралельні завантаження могли б вичерпати RAM контейнера.
+    std::lock_guard<std::mutex> clone_lk(g_engine.clone_mu);
+
+    std::vector<float> wave;
+    try {
+        wave = holos::decode_wav_24k(raw.data(), raw.size());
+    } catch (const std::exception& e) {
+        callback(json_error(400, e.what()));
+        return;
+    }
+
+    Timings tm;
+    const auto t_enc = Clock::now();
+    std::vector<float> emb;
+    try {
+        emb = g_engine.encoder->encode(wave);
+    } catch (const std::exception& e) {
+        callback(json_error(500, e.what()));
+        return;
+    }
+    tm.ort_ms = ms_since(t_enc);
+
+    const bool existed = g_engine.custom->has(name);
+    try {
+        g_engine.custom->save(name, emb);
+    } catch (const std::invalid_argument& e) {
+        callback(json_error(400, e.what()));
+        return;
+    } catch (const std::exception& e) {
+        callback(json_error(500, e.what()));
+        return;
+    }
+
+    Json::Value resp;
+    resp["status"] = "ok";
+    resp["voice"] = name;
+    resp["overwritten"] = existed;
+    resp["sample_rate"] = holos::kSampleRate;
+    resp["duration_sec"] = (double)wave.size() / holos::kSampleRate;
+    if (g_metrics) resp["timings"] = timings_json(tm);
+    callback(HttpResponse::newHttpJsonResponse(resp));
+}
+
+// /api/voices/{1} (DELETE) — видалити кастомний (клонований) голос.
+void handle_voices_delete(const std::string& raw_name,
+                          std::function<void(const HttpResponsePtr&)>&& callback) {
+    if (!g_engine.custom || !g_engine.custom->enabled()) {
+        callback(json_error(503, "збереження голосів вимкнено"));
+        return;
+    }
+    const std::string name = trim(drogon::utils::urlDecode(raw_name));
+    if (name.empty()) { callback(json_error(400, "очікується назва голосу")); return; }
+    if (g_engine.voices.has(name)) {
+        callback(json_error(400, "пресет не можна видалити: " + name));
+        return;
+    }
+    bool removed = false;
+    try {
+        removed = g_engine.custom->remove(name);
+    } catch (const std::exception& e) {
+        callback(json_error(500, e.what()));
+        return;
+    }
+    if (!removed) {
+        callback(json_error(404, "невідомий кастомний голос: " + name));
+        return;
+    }
+    Json::Value resp;
+    resp["status"] = "ok";
+    resp["voice"] = name;
+    callback(HttpResponse::newHttpJsonResponse(resp));
 }
 
 } // namespace
@@ -523,8 +671,10 @@ h1{font-size:1.5rem;margin:0 0 .25rem}
 .card{background:#171a21;border:1px solid #2a2f3a;border-radius:12px;padding:1.25rem;margin-bottom:1rem}
 label{display:block;font-size:.85rem;color:#9aa0aa;margin-bottom:.4rem}
 textarea{width:100%;min-height:110px;background:#0f1115;color:#e6e6e6;border:1px solid #2a2f3a;border-radius:8px;padding:.75rem;font:inherit;resize:vertical}
-select,input[type=range]{width:100%}
-select{background:#0f1115;color:#e6e6e6;border:1px solid #2a2f3a;border-radius:8px;padding:.55rem .6rem;font:inherit}
+select,input[type=range],input[type=text]{width:100%}
+select,input[type=text]{background:#0f1115;color:#e6e6e6;border:1px solid #2a2f3a;border-radius:8px;padding:.55rem .6rem;font:inherit}
+input[type=file]{width:100%;color:#9aa0aa;font-size:.85rem}
+button.small{padding:.4rem .75rem;font-size:.85rem}
 .row{display:flex;gap:1rem;flex-wrap:wrap}
 .row>div{flex:1;min-width:180px}
 button{background:#3b82f6;color:#fff;border:0;border-radius:8px;padding:.65rem 1.25rem;font:inherit;font-weight:600;cursor:pointer}
@@ -535,8 +685,6 @@ audio{width:100%;margin-top:.75rem}
 .status.err{color:#f87171}
 .status.ok{color:#4ade80}
 .disclaimer{font-size:.78rem;color:#6b7280;line-height:1.5;border-left:3px solid #374151;padding-left:.75rem;margin-top:1.5rem}
-.streambar{height:4px;background:#2a2f3a;border-radius:2px;margin-top:.75rem;overflow:hidden}
-.streambar>div{height:100%;width:0;background:#3b82f6;transition:width .15s}
 </style>
 </head>
 <body>
@@ -566,6 +714,7 @@ audio{width:100%;margin-top:.75rem}
     <div>
       <label for="voice">Голос</label>
       <select id="voice"></select>
+      <button id="delBtn" class="secondary small" type="button" style="margin-top:.5rem" disabled>Видалити клонований голос</button>
     </div>
     <div>
       <label for="speed">Швидкість: <span id="speedVal">1.00</span>×</label>
@@ -574,12 +723,31 @@ audio{width:100%;margin-top:.75rem}
   </div>
   <div style="margin-top:1rem;display:flex;gap:.75rem;flex-wrap:wrap">
     <button id="synthBtn">Синтезувати</button>
-    <button id="streamBtn" class="secondary">Стрімінг (WS)</button>
     <button id="dlBtn" class="secondary" disabled>Завантажити WAV</button>
   </div>
-  <div class="streambar"><div id="sbar"></div></div>
   <div class="status" id="status"></div>
   <audio id="player" controls style="display:none"></audio>
+</div>
+
+<div class="card">
+  <label>Клонування голосу з WAV</label>
+  <div class="row">
+    <div>
+      <input type="file" id="cloneFile" accept=".wav,audio/wav,audio/x-wav">
+    </div>
+    <div>
+      <input type="text" id="cloneName" maxlength="40" placeholder="Назва голосу (1-40 символів)">
+    </div>
+  </div>
+  <div style="margin-top:1rem;display:flex;gap:.75rem;flex-wrap:wrap;align-items:center">
+    <button id="cloneBtn" type="button">Зберегти голос</button>
+    <span id="cloneHint" class="status" style="margin:0"></span>
+  </div>
+  <div class="status" id="cloneStatus"></div>
+  <p style="font-size:.78rem;color:#6b7280;margin:.5rem 0 0">
+    WAV (PCM/float, будь-яка частота, до 60 с / 16 МБ; модель використовує перші ~30 с). Голос зберігається на сервері
+    (volume speakers) і доступний в API за назвою. Не клонуйте чужі голоси без згоди.
+  </p>
 </div>
 
 <div class="disclaimer">
@@ -596,14 +764,29 @@ let lastBlob=null;
 
 $("speed").oninput=()=>{$("speedVal").textContent=(+$("speed").value).toFixed(2)};
 
-async function loadVoices(){
+let customSet=new Set(), cloningReady=false;
+function updateDel(){$("delBtn").disabled=!customSet.has($("voice").value)}
+async function loadVoices(preferred){
   try{
     const r=await fetch("/api/voices");const d=await r.json();
-    const sel=$("voice");sel.innerHTML="";
-    (d.voices||[]).forEach(v=>{const o=document.createElement("option");o.value=v;o.textContent=v;sel.appendChild(o)});
+    customSet=new Set(d.custom||[]);cloningReady=!!d.cloning;
+    const sel=$("voice");const cur=preferred||sel.value;sel.innerHTML="";
+    const groups=[["Пресети",(d.voices||[]).filter(v=>!customSet.has(v))],
+                  ["Клоновані",(d.voices||[]).filter(v=>customSet.has(v))]];
+    groups.forEach(([label,list])=>{
+      if(!list.length)return;
+      const g=document.createElement("optgroup");g.label=label;
+      list.forEach(v=>{const o=document.createElement("option");o.value=v;o.textContent=v;g.appendChild(o)});
+      sel.appendChild(g);
+    });
+    if(cur&&[...sel.options].some(o=>o.value===cur))sel.value=cur;
+    $("cloneBtn").disabled=!cloningReady;
+    $("cloneHint").textContent=cloningReady?"":"Клонування недоступне: на сервері немає voice_encoder.onnx.";
+    updateDel();
   }catch(e){status("Не вдалося завантажити голоси: "+e,"err")}
 }
 loadVoices();
+$("voice").onchange=updateDel;
 
 $("vbBtn").onclick=async()=>{
   const text=$("text").value;
@@ -645,52 +828,48 @@ $("synthBtn").onclick=async()=>{
   finally{$("synthBtn").disabled=false}
 };
 
+const cstatus=(m,cls="")=>{const s=$("cloneStatus");s.textContent=m;s.className="status "+cls};
+
+$("cloneBtn").onclick=async()=>{
+  const file=$("cloneFile").files[0];
+  const name=$("cloneName").value.trim();
+  if(!file){cstatus("Оберіть WAV-файл","err");return}
+  if(!name){cstatus("Введіть назву голосу","err");return}
+  if(file.size>16*1024*1024){cstatus("Файл завеликий (максимум 16 МБ)","err");return}
+  $("cloneBtn").disabled=true;cstatus("Клонування… (енкодер CPU, кілька секунд)");
+  try{
+    const base64=await new Promise((res,rej)=>{
+      const fr=new FileReader();
+      fr.onload=()=>res(String(fr.result).split(",")[1]||"");
+      fr.onerror=()=>rej(fr.error);
+      fr.readAsDataURL(file);
+    });
+    const r=await fetch("/api/voices",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name,audio_base64:base64})});
+    const d=await r.json();
+    if(!r.ok){cstatus(d.detail||("HTTP "+r.status),"err");return}
+    cstatus(`Голос ${d.overwritten?"перезаписано":"збережено"}: ${d.voice} (${d.duration_sec.toFixed(2)} с)`,"ok");
+    await loadVoices(d.voice);
+  }catch(e){cstatus("Помилка: "+e,"err")}
+  finally{$("cloneBtn").disabled=!cloningReady}
+};
+
+$("delBtn").onclick=async()=>{
+  const name=$("voice").value;
+  if(!customSet.has(name))return;
+  if(!confirm(`Видалити клонований голос «${name}»?`))return;
+  try{
+    const r=await fetch("/api/voices/"+encodeURIComponent(name),{method:"DELETE"});
+    const d=await r.json();
+    if(!r.ok){status(d.detail||("HTTP "+r.status),"err");return}
+    status(`Голос видалено: ${name}`,"ok");
+    await loadVoices();
+  }catch(e){status("Помилка: "+e,"err")}
+};
+
 $("dlBtn").onclick=()=>{
   if(!lastBlob)return;
   const a=document.createElement("a");a.href=URL.createObjectURL(lastBlob);a.download="holos.wav";a.click();
-};
-
-function pcm16ToWav(pcmChunks,sampleRate=24000){
-  let total=0;pcmChunks.forEach(c=>total+=c.length);
-  const buf=new ArrayBuffer(44+total*2);const v=new DataView(buf);
-  const w=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i))};
-  w(0,"RIFF");v.setUint32(4,36+total*2,true);w(8,"WAVE");w(12,"fmt ");
-  v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
-  v.setUint32(24,sampleRate,true);v.setUint32(28,sampleRate*2,true);
-  v.setUint16(32,2,true);v.setUint16(34,16,true);w(36,"data");v.setUint32(40,total*2,true);
-  let off=44;
-  for(const c of pcmChunks){new Uint8Array(buf,off,c.length).set(new Uint8Array(c));off+=c.length}
-  return new Blob([buf],{type:"audio/wav"});
-}
-
-$("streamBtn").onclick=()=>{
-  const text=$("text").value.trim();
-  if(text.length<10){status("Текст закороткий (мінімум 10 символів)","err");return}
-  $("streamBtn").disabled=true;status("Стрімінг через WebSocket…");
-  const ws=new WebSocket((location.protocol==="https:"?"wss://":"ws://")+location.host+"/api/ws/synthesize");
-  const parts=[];let gotFinal=false;
-  ws.onopen=()=>ws.send(JSON.stringify({text,voice:$("voice").value,speed:+$("speed").value,auto_verbalize:$("vbMode").value}));
-  ws.onmessage=e=>{
-    if(typeof e.data==="string"){
-      const d=JSON.parse(e.data);
-      if(d.error){status("Помилка: "+d.error,"err");ws.close();return}
-      if(d.done){
-        gotFinal=true;
-        const blob=pcm16ToWav(parts,24000);
-        lastBlob=blob;
-        const url=URL.createObjectURL(blob);
-        const p=$("player");p.src=url;p.style.display="";p.play().catch(()=>{});
-        $("dlBtn").disabled=false;
-        status(`Стрімінг готово: ${d.duration_sec.toFixed(2)}с · ${parts.length} чанків · 24 kHz`,"ok");
-        ws.close();
-      }
-    }else{
-      parts.push(e.data);
-      $("sbar").style.width=Math.min(100,parts.length*12)+"%";
-    }
-  };
-  ws.onerror=()=>{status("WebSocket помилка","err");$("streamBtn").disabled=false};
-  ws.onclose=()=>{$("streamBtn").disabled=false;$("sbar").style.width="0"};
 };
 </script>
 </body>
@@ -704,14 +883,19 @@ int main() {
     std::string voices_json = env("HOLOS_VOICES", models + "/voices.json");
     std::string onnx = env("HOLOS_ONNX", models + "/holos_cpu_int8.onnx");
     std::string accentor = env("HOLOS_ACCENTOR", models + "/accentor-lite.onnx");
+    std::string voice_encoder = env("HOLOS_VOICE_ENCODER", models + "/voice_encoder.onnx");
+    std::string speakers_dir = env("HOLOS_SPEAKERS_DIR", "/app/speakers");
     int threads = env_int("HOLOS_THREADS", 0);
 
     LOG_INFO << "loading models: trie=" << trie << " vocab=" << vocab
              << " voices=" << voices_json << " onnx=" << onnx
              << " accentor=" << accentor;
-    g_engine.load(trie, vocab, voices_json, onnx, accentor, threads);
+    g_engine.load(trie, vocab, voices_json, onnx, accentor, voice_encoder, speakers_dir,
+                  threads);
     LOG_INFO << "models loaded; voices=" << g_engine.voice_names.size()
              << " vocab=" << g_engine.tokenizer.vocab_size();
+    LOG_INFO << "cloning: " << (g_engine.cloning_ready() ? "ready" : "disabled")
+             << " (encoder=" << voice_encoder << " speakers=" << speakers_dir << ")";
     if (g_metrics)
         LOG_INFO << "[startup] engine loaded +"
                  << (long long)std::llround(ms_since(g_start)) << "ms";
@@ -739,6 +923,10 @@ int main() {
     app()
         .setLogPath("./")
         .setLogLevel(trantor::Logger::kWarn)
+        // Клонування: WAV у base64 у JSON-тілі (типово drogon ріже на 1 МБ/64 КБ).
+        // 24 МБ тіла = WAV до 16 МБ після base64-інфляції (~4/3).
+        .setClientMaxBodySize(24 * 1024 * 1024)
+        .setClientMaxMemoryBodySize(24 * 1024 * 1024)
         .addListener("0.0.0.0", port)
         .registerHandler("/",
             [](const HttpRequestPtr&, std::function<void(const HttpResponsePtr&)>&& cb) {
@@ -765,6 +953,7 @@ int main() {
                 j["threads"] = g_engine.synth->intra_threads();
                 j["stress"] = "dictionary-A";
                 j["voices"] = (int)g_engine.voice_names.size();
+                j["cloning"] = g_engine.cloning_ready();
 #ifdef HOLOS_WITH_VERBALIZER
                 j["verbalizer"] = g_neural ? "neural+rule" : "rule";
 #else
@@ -777,11 +966,21 @@ int main() {
             [](const HttpRequestPtr&, std::function<void(const HttpResponsePtr&)>&& cb) {
                 Json::Value j;
                 j["voices"] = Json::arrayValue;
-                for (auto& n : g_engine.voice_names) j["voices"].append(n);
-                j["custom"] = Json::arrayValue; // клонування — Python
+                for (auto& n : g_engine.all_voice_names()) j["voices"].append(n);
+                j["custom"] = Json::arrayValue;
+                if (g_engine.custom)
+                    for (auto& n : g_engine.custom->names()) j["custom"].append(n);
+                j["cloning"] = g_engine.cloning_ready();
                 cb(HttpResponse::newHttpJsonResponse(j));
             },
             {Get})
+        .registerHandler("/api/voices", &handle_voices_save, {Post})
+        .registerHandler("/api/voices/{1}",
+            [](const HttpRequestPtr&, std::function<void(const HttpResponsePtr&)>&& cb,
+               std::string name) {
+                handle_voices_delete(name, std::move(cb));
+            },
+            {Delete})
         .registerHandler("/v1/audio/speech", &handle_openai_speech, {Post})
         .registerHandler("/api/synthesize", &handle_synthesize, {Post})
         .registerHandler("/api/verbalize",
