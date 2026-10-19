@@ -35,5 +35,17 @@ if(TARGET holos_core)
       "${CMAKE_CURRENT_SOURCE_DIR}/verbalizer_neural_golden.tsv"
       "${HOLOS_TEST_VERBALIZER_DIR}")
     set_tests_properties(verbalizer_neural_golden PROPERTIES SKIP_RETURN_CODE 77)
+
+    # Gemma verbalizer: препроцесинг (без моделей) + golden (skip 77).
+    add_executable(test_gemma_prep test_gemma_prep.cpp)
+    target_link_libraries(test_gemma_prep PRIVATE holos_core)
+    add_test(NAME gemma_prep COMMAND test_gemma_prep)
+
+    add_executable(test_verbalizer_gemma test_verbalizer_gemma.cpp)
+    target_link_libraries(test_verbalizer_gemma PRIVATE holos_core)
+    add_test(NAME verbalizer_gemma_golden COMMAND test_verbalizer_gemma
+      "${CMAKE_CURRENT_SOURCE_DIR}/gemma_verbalizer_golden.tsv"
+      "${HOLOS_TEST_VERBALIZER_GEMMA_DIR}")
+    set_tests_properties(verbalizer_gemma_golden PROPERTIES SKIP_RETURN_CODE 77)
   endif()
 endif()

@@ -1,5 +1,7 @@
 #include "verbalizer_neural.h"
 
+#include "verbalizer_gemma.h"
+
 #include <onnxruntime_cxx_api.h>
 
 #include <sentencepiece_processor.h>
@@ -750,8 +752,11 @@ std::string NeuralVerbalizer::verbalize(const std::string& text) {
     return out;
 }
 
-std::unique_ptr<NeuralVerbalizer> make_neural_verbalizer(const std::string& model_dir) {
+std::unique_ptr<NeuralVerbalizerBase> make_neural_verbalizer(const std::string& model_dir) {
     if (model_dir.empty()) return nullptr;
+    // Gemma-нормалізатор (decoder-only, KV-кеш) впізнається за model.onnx.
+    if (file_exists(path_join(model_dir, "model.onnx")))
+        return make_gemma_verbalizer(model_dir);
     auto v = std::make_unique<NeuralVerbalizer>(model_dir);
     if (!v->ready()) return nullptr;
     return v;

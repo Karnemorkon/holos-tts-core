@@ -23,6 +23,9 @@ set(HOLOS_ORT_ROOT "" CACHE PATH "Path to extracted onnxruntime prebuilt (includ
 # Каталог моделей для golden-тесту neural verbalizer (порожній -> тест skip).
 set(HOLOS_TEST_VERBALIZER_DIR "" CACHE PATH "onnx-int8 verbalizer models dir for golden test")
 
+# Каталог моделей для golden-тесту Gemma-вербалізатора (порожній -> тест skip).
+set(HOLOS_TEST_VERBALIZER_GEMMA_DIR "" CACHE PATH "gemma int8 verbalizer models dir for golden test")
+
 include(cmake/deps.cmake)
 
 # --- core library -----------------------------------------------------------
@@ -69,7 +72,8 @@ if(HOLOS_WITH_VERBALIZER)
     message(FATAL_ERROR "SentencePiece not found (apt install libsentencepiece-dev) "
       "or configure with -DHOLOS_WITH_VERBALIZER=OFF")
   endif()
-  target_sources(holos_core PRIVATE src/core/verbalizer_neural.cpp)
+  target_sources(holos_core PRIVATE src/core/verbalizer_neural.cpp
+                                src/core/verbalizer_gemma.cpp)
   target_compile_definitions(holos_core PUBLIC HOLOS_WITH_VERBALIZER=1)
   target_include_directories(holos_core PUBLIC ${SENTENCEPIECE_INCLUDE_DIR})
   target_link_libraries(holos_core PUBLIC ${SENTENCEPIECE_LIBRARY})

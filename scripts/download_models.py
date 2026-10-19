@@ -7,7 +7,7 @@ Lays files out to match holos-server defaults (HOLOS_MODELS_DIR layout):
   models/voices.json
   models/holos_cpu_int8.onnx
   models/accentor-lite.onnx
-  models/verbalizer/onnx-int8/...
+  models/verbalizer/gemma-int8/...
 
 Usage:
   python3 scripts/download_models.py [--out DIR] [--repo REPO] [--patterns P ...]
@@ -36,8 +36,11 @@ FLAT_MAP = {
 
 # Keep directory structure
 TREE_PREFIXES = {
-    "verbalizer/onnx-int8": "verbalizer/onnx-int8",
+    "verbalizer/gemma-int8": "verbalizer/gemma-int8",
 }
+
+# Legacy backend (rollback / A-B): --with-m2m100
+M2M100_PREFIX = {"verbalizer/onnx-int8": "verbalizer/onnx-int8"}
 
 
 def main() -> int:
@@ -47,23 +50,27 @@ def main() -> int:
     ap.add_argument("--token", default=os.environ.get("HF_TOKEN", ""))
     ap.add_argument("--force", action="store_true",
                     help="re-download even if models are already present")
+    ap.add_argument("--with-m2m100", action="store_true",
+                    help="also download legacy M2M100 verbalizer (verbalizer/onnx-int8)")
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
 
+    tree_prefixes = dict(TREE_PREFIXES)
+    if args.with_m2m100:
+        tree_prefixes.update(M2M100_PREFIX)
+
     # Ідемпотентність (compose auto-init): якщо всі файли вже на місці — виходимо.
-    # Підтримуємо обидві розкладки: стару (два decoders) і merged (один If-граф).
-    vb = os.path.join(args.out, "verbalizer/onnx-int8")
-    has_decoder = os.path.isfile(os.path.join(vb, "decoder_model_merged_quantized.onnx")) or (
-        os.path.isfile(os.path.join(vb, "decoder_model_quantized.onnx"))
-        and os.path.isfile(os.path.join(vb, "decoder_with_past_model_quantized.onnx"))
-    )
+    vb = os.path.join(args.out, "verbalizer/gemma-int8")
+    has_model = os.path.isfile(os.path.join(vb, "model.onnx"))
     required = list(FLAT_MAP.values()) + [
-        "verbalizer/onnx-int8/config.json",
-        "verbalizer/onnx-int8/encoder_model_quantized.onnx",
-        "verbalizer/onnx-int8/sentencepiece.bpe.model",
+        "verbalizer/gemma-int8/config.json",
+        "verbalizer/gemma-int8/model.onnx",
+        "verbalizer/gemma-int8/tokenizer.model",
     ]
-    if not args.force and has_decoder and all(
+    if args.with_m2m100:
+        required.append("verbalizer/onnx-int8/encoder_model_quantized.onnx")
+    if not args.force and has_model and all(
         os.path.isfile(p := os.path.join(args.out, f)) and os.path.getsize(p) > 0
         for f in required
     ):
@@ -78,18 +85,18 @@ def main() -> int:
 
     print(f"Downloading {args.repo} -> {args.out} ...")
     cache_dir = os.path.join(args.out, ".hf_cache")
+    patterns = [
+        "stress/stress.trie",
+        "tts/vocab.json",
+        "tts/voices.json",
+        "tts/holos_cpu_int8.onnx",
+        "accentor/accentor-lite.onnx",
+    ] + [f"{p}/*" for p in tree_prefixes]
     snapshot_download(
         args.repo,
         local_dir=cache_dir,
         token=args.token or None,
-        allow_patterns=[
-            "stress/stress.trie",
-            "tts/vocab.json",
-            "tts/voices.json",
-            "tts/holos_cpu_int8.onnx",
-            "accentor/accentor-lite.onnx",
-            "verbalizer/onnx-int8/*",
-        ],
+        allow_patterns=patterns,
     )
 
     def move(src_rel: str, dst_rel: str) -> None:
@@ -108,7 +115,7 @@ def main() -> int:
     for src_rel, dst_rel in FLAT_MAP.items():
         move(src_rel, dst_rel)
 
-    for src_prefix, dst_prefix in TREE_PREFIXES.items():
+    for src_prefix, dst_prefix in tree_prefixes.items():
         src_root = os.path.join(cache_dir, src_prefix)
         if not os.path.isdir(src_root):
             print(f"  MISSING dir in repo: {src_prefix}/", file=sys.stderr)
@@ -130,7 +137,7 @@ def main() -> int:
     shutil.rmtree(cache_dir, ignore_errors=True)
 
     print("\nDone. Launch server with:")
-    print(f"  HOLOS_MODELS_DIR=$PWD/{args.out} HOLOS_VERBALIZER_DIR=$PWD/{args.out}/verbalizer/onnx-int8 \\")
+    print(f"  HOLOS_MODELS_DIR=$PWD/{args.out} HOLOS_VERBALIZER_DIR=$PWD/{args.out}/verbalizer/gemma-int8 \\")
     print("  holos-server")
     return 0
 

@@ -61,7 +61,7 @@ const char* kOpenAIVoices[] = {"alloy", "echo", "fable", "onyx", "nova", "shimme
 
 // Neural verbalizer (M2M100 ONNX int8); nullptr якщо недоступний.
 #ifdef HOLOS_WITH_VERBALIZER
-std::unique_ptr<holos::NeuralVerbalizer> g_neural;
+std::unique_ptr<holos::NeuralVerbalizerBase> g_neural;
 #endif
 
 // Режим автовербалізації: "neural" (типово, якість) | "rule" (швидкість) | false/Off.

@@ -38,7 +38,7 @@ C++ native core для **HolosTTS** (український text-to-speech). Е�
 
 | Режим | Реалізація | Латентність | Якість |
 |---|---|---|---|
-| `neural` (типово) | M2M100-630M-distilled, ONNX int8, KV-cache | ~3–4 с на речення (CPU) | дослівний паритет з hybrid (4/4 MATCH) |
+| `neural` (типово) | Gemma-3-270M (український verbalizer), ONNX int8, KV-cache | ~1–3 с на речення (CPU) | дослівний паритет з hybrid (4/4 MATCH) |
 | `rule` | C++ регулярки (цифри/дати/час) | мілісекунди | базовий (граматика відмінювання гірша за neural) |
 | `off` / `false` | текст як є | 0 | — |
 
@@ -52,7 +52,8 @@ Legacy bool `auto_verbalize: true` → `neural`, `false` → `off`.
 | Компонент | Шлях у репо | Застосунок |
 |---|---|---|
 | TTS ONNX int8 + vocab + voices | `tts/` | генерація аудіо |
-| Neural verbalizer (M2M100 ONNX int8) | `verbalizer/onnx-int8/` | цифри→слова (якість) |
+| Neural verbalizer (Gemma-3-270M ONNX int8, дефолт) | `verbalizer/gemma-int8/` | цифри→слова (якість) |
+| Neural verbalizer (M2M100 ONNX int8, legacy) | `verbalizer/onnx-int8/` | відкат, `--with-m2m100` |
 | Neural verbalizer (CT2 int8) | `verbalizer/ct2-int8/` | той самий, CTranslate2 |
 | Accentor (ONNX, single-file) | `accentor/` | нейро-фолбек наголосу |
 | Stress trie | `stress/stress.trie` | словниковий наголос |
@@ -66,7 +67,7 @@ python3 scripts/download_models.py --out models
 
 ## Швидкий старт
 
-Кроки від нуля до працюючого сервера (потрібен Docker; ~1.1 ГБ на моделі).
+Кроки від нуля до працюючого сервера (потрібен Docker; ~1.6 ГБ на моделі).
 
 **1. Запустити** — один із варіантів:
 
@@ -80,7 +81,7 @@ docker run -d -p 8004:8004 -v $PWD/models:/app/models:ro \
     --name holos-core morkon06/holostts-core:latest
 ```
 
-Перший `docker compose up -d` сам завантажує моделі (~2.1 ГБ, публічний HF,
+Перший `docker compose up -d` сам завантажує моделі (~1.6 ГБ, публічний HF,
 без токена) у named volume `holos_core_models` і запускає сервер одразу після
 завершення; подальші старти — миттєві (skipped, якщо моделі вже на місці).
 Примусове перезавантаження:
@@ -110,7 +111,7 @@ curl -s -X POST localhost:8004/api/synthesize \
 
 **Нотатки:**
 
-- Нейро-дефолт тримає ~1.7 ГБ RSS у простої (+70 МБ під час генерації) —
+- Нейро-дефолт тримає ~1.1 ГБ RSS у простої (+~60 МБ під час генерації) —
   давайте контейнеру ліміт ≥2 ГБ. Rule-only (без neural-вербалізатора):
   `-e HOLOS_VERBALIZER_DIR=""` → ~468 МБ.
 - Голос за замовчуванням core-API: `Speaker_0` (hybrid використовує
@@ -122,7 +123,7 @@ curl -s -X POST localhost:8004/api/synthesize \
 | Залежність | Призначення | Спосіб |
 |---|---|---|
 | ONNX Runtime 1.31 | генерація аудіо + neural verbalizer + accentor | prebuilt tarball |
-| sentencepiece | токенізатор M2M100 | apt (`libsentencepiece-dev`) |
+| sentencepiece | токенізатор M2M100/Gemma | apt (`libsentencepiece-dev`) |
 | marisa-trie | словник наголосів | FetchContent |
 | utf8proc, pcre2, nlohmann_json, dr_wav | Unicode/regex/JSON/WAV | FetchContent |
 | Drogon | HTTP/WS сервер | FetchContent |
@@ -140,12 +141,14 @@ cmake -S . -B build -G Ninja \
     -DHOLOS_ORT_ROOT=/opt/ort-1.31.0
 cmake --build build --parallel
 
-# golden-тест neural verbalizer (30/30 vs Python ONNX)
-cmake -S . -B build -DHOLOS_TEST_VERBALIZER_DIR=/path/to/verbalizer/onnx-int8
-ctest --test-dir build -R verbalizer_neural
+# golden-тести neural verbalizer (neural 30/30, gemma 46/46 vs Python ONNX)
+cmake -S . -B build \
+    -DHOLOS_TEST_VERBALIZER_DIR=/path/to/verbalizer/onnx-int8 \
+    -DHOLOS_TEST_VERBALIZER_GEMMA_DIR=/path/to/verbalizer/gemma-int8
+ctest --test-dir build -R "verbalizer_neural|gemma_prep|verbalizer_gemma"
 ```
 
-Золотий тест пропускається (exit 77), якщо `HOLOS_TEST_VERBALIZER_DIR` не задано.
+Золоті тести пропускаються (exit 77), якщо відповідний `_DIR` не задано.
 CI (ubuntu-24.04) збирає конфіг `ORT=ON, SERVER=OFF` і проганяє golden-тести
 без моделей.
 
@@ -153,7 +156,7 @@ CI (ubuntu-24.04) збирає конфіг `ORT=ON, SERVER=OFF` і проган
 
 ```bash
 export HOLOS_MODELS_DIR=$PWD/models
-export HOLOS_VERBALIZER_DIR=$PWD/models/verbalizer/onnx-int8   # або "" для rule-only
+export HOLOS_VERBALIZER_DIR=$PWD/models/verbalizer/gemma-int8   # або "" для rule-only
 ./build/server/holos-server   # :8004
 ```
 
@@ -198,8 +201,8 @@ rule-вербалізатор гірше відмінює («дванадцят�
 
 ### Бенчмарк (Xeon 16 ядер, `HOLOS_THREADS=9`, теплий старт, медіана з 3)
 
-Cold start (процес → `healthz` 200): **~12.5 с** — engine (trie + TTS ONNX +
-accentor) ~8.0 с, neural verbalizer (M2M100) ~4.6 с; rule-only ≈ 8 с.
+Cold start (процес → `healthz` 200): **~10 с** — engine (trie + TTS ONNX +
+accentor) ~8.0 с, neural verbalizer (Gemma-3-270M) ~2.4 с; rule-only ≈ 8 с.
 
 | Текст | Режим | Частин | TTFB, мс (stream / WS) | total, мс | Аудіо, с | RTF | vb, мс | ort, мс |
 |---|---|---|---|---|---|---|---|---|
@@ -207,21 +210,25 @@ accentor) ~8.0 с, neural verbalizer (M2M100) ~4.6 с; rule-only ≈ 8 с.
 | короткий, без цифр (18) | neural | 1 | 586 / 571 | 583 | 1.38 | 0.43 | 0 | 578 |
 | середній, без цифр (86) | rule | 1 | 2116 / 2087 | 2117 | 6.12 | 0.35 | 0 | 2099 |
 | цифри/дата (82) | rule | 1 | 3103 / 3061 | 3124 | 9.07 | 0.34 | 0 | 3102 |
-| цифри/дата (82) | neural | 1 | 7465 / 7880 | 7500 | 8.72 | 0.86 | 4456 | 3022 |
+| цифри/дата (82) | neural | 1 | 5597 / 5775 | 5625 | 8.75 | 0.64 | 2635 | 2953 |
 | довгий (340, 2 частини) | rule | 2 | 4756 / 4729 | 8510 | 24.98 | 0.34 | 0 | 8447 |
-| довгий (340, 2 частини) | neural | 2 | 16497 / 16891 | 19829 | 25.20 | 0.80 | 11097 | 8676 |
+| довгий (340, 2 частини) | neural | 2 | 8278 / 7909 | 11183 | 25.20 | 0.44 | 2709 | 8393 |
 
 - `TTFB` — `/v1/audio/speech` (stream) та `WS /api/ws/synthesize`; `total` — `/api/synthesize`.
 - Neural-вербалізація працює лише на текстах із цифрами (гейт `has_digits`); без цифр neural ≡ rule.
 - TTFB = час до першого чанка ≈ синтез першої частини (~100 символів) — тому для довгих
-  текстів це секунди. RTF власне ORT ≈ 0.34–0.43; цифрові тексти в neural додають vb ~5–12 с.
+  текстів це секунди. RTF власне ORT ≈ 0.34–0.43; цифрові тексти в neural додають vb ~2.6–2.9 с.
 - Цілі ТЗ (TTFB ≤ 200 мс, RTF < 0.25) на CPU не досягнуті — потрібні дрібніший стрімінг
   і оптимізації ORT (окремий етап).
-- RSS: neural **1.24 ГБ**, rule-only (`HOLOS_VERBALIZER_DIR=""`) **468 МБ** — M2M100 418M
-  int8 свідомо обмінюється на якість.
-- Вербалізатор: merged int8 decoder (If-граф, один ORT-сесія) замість окремих
-  full/with-past — диск **1.2 ГБ → 764 МБ**, RSS **1.65 → 1.24 ГБ**, завантаження
-  ~5.6 → ~4.6 с; якість без змін (golden 30/30, `tools/merge_verbalizer_onnx.py`).
+- RSS: neural **1.07 ГБ**, rule-only (`HOLOS_VERBALIZER_DIR=""`) **468 МБ** — Gemma-3-270M
+  int8 (226 МБ на диску) свідомо обмінюється на якість; M2M100-418M більше не дефолт.
+- Вербалізатор: Gemma-3-270M-uk (ONNX int8, MatMul-only QInt8) замість M2M100-418M —
+  диск **764 МБ → 226 МБ**, RSS **1.65 → 1.07 ГБ**, cold start vb **~4.6 → ~2.4 с**,
+  vb **4.9/11.6 → 2.6/2.9 с** (цифри/довгий), golden 46/46 vs Python-референс
+  (`tests/gemma_verbalizer_golden.tsv`). Кращий на кодах/IBAN/телефонах/рахунках і
+  узгодженні числівників; поодинокі model-level помилки лишаються («1 год 30 хв»
+  відмінки, «12 3456 789» величина, заміна валюти в «500 рублів»). M2M100 лишається
+  в HF-репо для відкату (`scripts/download_models.py --with-m2m100`).
 
 Відтворення: `HOLOS_METRICS=1 ./build/server/holos-server` +
 `python3 scripts/bench_latency.py --url http://127.0.0.1:8004 --runs 3`
@@ -267,11 +274,18 @@ docker/        multi-stage Dockerfile
 - **M6** ✅ паритет стресу: accentor single-file ONNX (відновлено втрачений
   external-data експорт), Unicode lower/title, UTF-8-safe вставка U+0301;
   тривалість аудіо Δ ≤ 0.02 с vs hybrid
+- **M7** ✅ Gemma-3-270M verbalizer: новий backend (`verbalizer/gemma-int8`,
+  авто-детект `model.onnx`), PCRE2-порт digit_router/bignum_spacing, спліт
+  речень з абревіатурами, golden 46/46; диск −538 МБ, RSS −0.58 ГБ, vb ×2–4
 
 Надалі: граматика rule-вербалізатора, порядок `/api/voices`, CT2-вербалізація,
-мульті-архітектурні образи.
+мульті-архітектурні образи, fine-tune Gemma на проблемних кейсах (відмінки
+числівників, складні групи цифр, валюти).
 
 ## Ліцензія
 
 MIT. Моделі та `stress.trie` належать їх авторам (див. `patriotyk/*`,
 `ukrainian-word-stress`, `ukrainian_accentor`, M2M100 Helsinki-NLP).
+`verbalizer/gemma-int8` — квантована похідна Gemma 3 270M
+(© Google, [Gemma Terms of Use](https://ai.google.dev/gemma/terms)) та
+[skypro1111/gemma-3-270m-uk-verbalizer](https://huggingface.co/skypro1111/gemma-3-270m-uk-verbalizer).
