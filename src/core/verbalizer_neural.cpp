@@ -117,7 +117,7 @@ void vb_dbg_top(const char* tag, const float* row, int64_t vocab, int k) {
 
 struct NeuralVerbalizer::Impl {
     // Імена входів/виходів (класифікуються при init).
-    enum class SlotKind { Ids, Mask, EncHidden, Past };
+    enum class SlotKind { Ids, Mask, EncHidden, Past, UseCache };
 
     struct Slot {
         SlotKind kind;
@@ -132,6 +132,8 @@ struct NeuralVerbalizer::Impl {
     Ort::Session enc{nullptr};
     Ort::Session dec_full{nullptr};
     Ort::Session dec_past{nullptr};
+    Ort::Session dec_merged{nullptr};
+    bool merged_mode = false;
 
     sentencepiece::SentencePieceProcessor sp;
 
@@ -165,6 +167,7 @@ struct NeuralVerbalizer::Impl {
     std::vector<int> past_out_idx;             // per past input: idx у past_out_names або -1
     std::vector<int> past_slot_pos;            // per past input: позиція слота в past_slots
     std::vector<int> past_feed_pos;            // per past input: позиція у feed-векторі
+    std::vector<std::vector<int64_t>> past_shapes;  // per past input: shape шаблон
 
     static std::string present_name_for(const std::string& past_name) {
         // "past_key_values.N.X" -> "present.N.X"
@@ -188,6 +191,8 @@ struct NeuralVerbalizer::Impl {
                 sl.kind = SlotKind::Mask;
             } else if (name.find("encoder_hidden") != std::string::npos) {
                 sl.kind = SlotKind::EncHidden;
+            } else if (name == "use_cache_branch") {
+                sl.kind = SlotKind::UseCache;
             } else if (is_past_decoder && name.rfind("past_key_values.", 0) == 0) {
                 sl.kind = SlotKind::Past;
                 sl.past_idx = static_cast<int>(past_in_names.size());
@@ -260,16 +265,22 @@ struct NeuralVerbalizer::Impl {
             const char* enc_cands[] = {"encoder_model_quantized.onnx",
                                        "encoder_model_optimized.onnx",
                                        "encoder_model.onnx", nullptr};
+            const char* merged_cands[] = {"decoder_model_merged_quantized.onnx",
+                                          "decoder_model_merged.onnx", nullptr};
             const char* full_cands[] = {"decoder_model_quantized.onnx",
                                         "decoder_model_optimized.onnx",
                                         "decoder_model.onnx", nullptr};
             const char* past_cands[] = {"decoder_with_past_model_quantized.onnx",
                                         "decoder_model_with_past_quantized.onnx",
                                         "decoder_with_past_model.onnx", nullptr};
-            std::string enc_path, full_path, past_path;
+            std::string enc_path, merged_path, full_path, past_path;
             for (int i = 0; enc_cands[i]; ++i) {
                 auto p = path_join(dir, enc_cands[i]);
                 if (file_exists(p)) { enc_path = p; break; }
+            }
+            for (int i = 0; merged_cands[i]; ++i) {
+                auto p = path_join(dir, merged_cands[i]);
+                if (file_exists(p)) { merged_path = p; break; }
             }
             for (int i = 0; full_cands[i]; ++i) {
                 auto p = path_join(dir, full_cands[i]);
@@ -279,7 +290,7 @@ struct NeuralVerbalizer::Impl {
                 auto p = path_join(dir, past_cands[i]);
                 if (file_exists(p)) { past_path = p; break; }
             }
-            if (enc_path.empty() || full_path.empty()) {
+            if (enc_path.empty() || (merged_path.empty() && full_path.empty())) {
                 last_error = "missing encoder/decoder onnx in " + dir;
                 return false;
             }
@@ -288,7 +299,10 @@ struct NeuralVerbalizer::Impl {
             sess_opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
             enc = Ort::Session(env, enc_path.c_str(), sess_opts);
-            dec_full = Ort::Session(env, full_path.c_str(), sess_opts);
+            if (!merged_path.empty())
+                dec_merged = Ort::Session(env, merged_path.c_str(), sess_opts);
+            else
+                dec_full = Ort::Session(env, full_path.c_str(), sess_opts);
 
             // encoder names
             {
@@ -311,59 +325,105 @@ struct NeuralVerbalizer::Impl {
                 enc_out_hidden = n.get();
             }
 
-            // decoder_model (step0)
-            if (!resolve_names(dec_full, false, full_slots, full_out_logits)) return false;
-            {
-                auto mo = dec_full.GetOutputCount();
-                for (size_t i = 0; i < mo; ++i) {
-                    auto n = dec_full.GetOutputNameAllocated(i, allocator);
-                    full_out_names.push_back(n.get());
-                }
-            }
-
-            // decoder_with_past (optional)
-            if (file_exists(past_path)) {
+            // decoder_model_merged: step0 + steps>0 в одному графі (If + use_cache_branch)
+            if (!merged_path.empty()) {
+                merged_mode = true;
                 past_slots.clear();
                 past_in_names.clear();
-                dec_past = Ort::Session(env, past_path.c_str(), sess_opts);
-                if (!resolve_names(dec_past, true, past_slots, past_out_logits)) return false;
-                auto mo = dec_past.GetOutputCount();
+                if (!resolve_names(dec_merged, true, past_slots, past_out_logits)) return false;
+                auto mo = dec_merged.GetOutputCount();
                 for (size_t i = 0; i < mo; ++i) {
-                    auto n = dec_past.GetOutputNameAllocated(i, allocator);
+                    auto n = dec_merged.GetOutputNameAllocated(i, allocator);
                     past_out_names.push_back(n.get());
                 }
-                // map past input -> output index
-                past_out_idx.resize(past_in_names.size(), -1);
-                past_slot_pos.resize(past_in_names.size(), -1);
-                past_feed_pos.resize(past_in_names.size(), -1);
+                past_shapes.resize(past_in_names.size());
                 for (size_t i = 0; i < past_slots.size(); ++i) {
                     if (past_slots[i].past_idx >= 0) {
-                        int pi = past_slots[i].past_idx;
-                        past_slot_pos[pi] = static_cast<int>(i);
-                        past_feed_pos[pi] = static_cast<int>(i);
-                        auto pn = present_name_for(past_in_names[pi]);
-                        for (size_t j = 0; j < past_out_names.size(); ++j) {
-                            if (past_out_names[j] == pn) {
-                                past_out_idx[pi] = static_cast<int>(j);
-                                break;
-                            }
-                        }
+                        auto ti = dec_merged.GetInputTypeInfo(i);
+                        past_shapes[past_slots[i].past_idx] =
+                            ti.GetTensorTypeAndShapeInfo().GetShape();
                     }
                 }
-                // map past input -> step0 (full decoder) output index
-                full_present_idx.resize(past_in_names.size(), -1);
-                for (size_t pi = 0; pi < past_in_names.size(); ++pi) {
+                past_out_idx.assign(past_in_names.size(), -1);
+                past_slot_pos.assign(past_in_names.size(), -1);
+                past_feed_pos.assign(past_in_names.size(), -1);
+                full_present_idx.assign(past_in_names.size(), -1);
+                for (size_t i = 0; i < past_slots.size(); ++i) {
+                    if (past_slots[i].past_idx < 0) continue;
+                    int pi = past_slots[i].past_idx;
+                    past_slot_pos[pi] = static_cast<int>(i);
+                    past_feed_pos[pi] = static_cast<int>(i);
                     auto pn = present_name_for(past_in_names[pi]);
-                    for (size_t j = 0; j < full_out_names.size(); ++j) {
-                        if (full_out_names[j] == pn) {
+                    for (size_t j = 0; j < past_out_names.size(); ++j) {
+                        if (past_out_names[j] == pn) {
                             full_present_idx[pi] = static_cast<int>(j);
                             break;
                         }
                     }
+                    if (full_present_idx[pi] < 0) {
+                        last_error = "merged decoder missing output " + pn;
+                        return false;
+                    }
+                    // кроки >0: cross-present у merged фіктивний (shape 0) — лишаємо вхідний KV
+                    if (past_in_names[pi].find(".encoder.") == std::string::npos)
+                        past_out_idx[pi] = full_present_idx[pi];
                 }
                 has_cache = true;
-                for (int idx : full_present_idx) {
-                    if (idx < 0) { has_cache = false; break; }
+            } else {
+                // decoder_model (step0)
+                if (!resolve_names(dec_full, false, full_slots, full_out_logits)) return false;
+                {
+                    auto mo = dec_full.GetOutputCount();
+                    for (size_t i = 0; i < mo; ++i) {
+                        auto n = dec_full.GetOutputNameAllocated(i, allocator);
+                        full_out_names.push_back(n.get());
+                    }
+                }
+
+                // decoder_with_past (optional)
+                if (file_exists(past_path)) {
+                    past_slots.clear();
+                    past_in_names.clear();
+                    dec_past = Ort::Session(env, past_path.c_str(), sess_opts);
+                    if (!resolve_names(dec_past, true, past_slots, past_out_logits)) return false;
+                    auto mo = dec_past.GetOutputCount();
+                    for (size_t i = 0; i < mo; ++i) {
+                        auto n = dec_past.GetOutputNameAllocated(i, allocator);
+                        past_out_names.push_back(n.get());
+                    }
+                    // map past input -> output index
+                    past_out_idx.resize(past_in_names.size(), -1);
+                    past_slot_pos.resize(past_in_names.size(), -1);
+                    past_feed_pos.resize(past_in_names.size(), -1);
+                    for (size_t i = 0; i < past_slots.size(); ++i) {
+                        if (past_slots[i].past_idx >= 0) {
+                            int pi = past_slots[i].past_idx;
+                            past_slot_pos[pi] = static_cast<int>(i);
+                            past_feed_pos[pi] = static_cast<int>(i);
+                            auto pn = present_name_for(past_in_names[pi]);
+                            for (size_t j = 0; j < past_out_names.size(); ++j) {
+                                if (past_out_names[j] == pn) {
+                                    past_out_idx[pi] = static_cast<int>(j);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    // map past input -> step0 (full decoder) output index
+                    full_present_idx.resize(past_in_names.size(), -1);
+                    for (size_t pi = 0; pi < past_in_names.size(); ++pi) {
+                        auto pn = present_name_for(past_in_names[pi]);
+                        for (size_t j = 0; j < full_out_names.size(); ++j) {
+                            if (full_out_names[j] == pn) {
+                                full_present_idx[pi] = static_cast<int>(j);
+                                break;
+                            }
+                        }
+                    }
+                    has_cache = true;
+                    for (int idx : full_present_idx) {
+                        if (idx < 0) { has_cache = false; break; }
+                    }
                 }
             }
 
@@ -418,6 +478,17 @@ struct NeuralVerbalizer::Impl {
         return out;
     }
 
+    // Порожній KV-тензор для кроку 0 merged-графа: [1, heads, 0, head_dim].
+    Ort::Value make_empty_past(Ort::MemoryInfo& mem, int pi) {
+        static float dummy = 0.0f;
+        std::vector<int64_t> shp = past_shapes[pi];
+        for (auto& d : shp)
+            if (d < 0) d = 1;
+        if (!shp.empty()) shp[0] = 1;
+        if (shp.size() > 2) shp[2] = 0;
+        return Ort::Value::CreateTensor<float>(mem, &dummy, 0, shp.data(), shp.size());
+    }
+
     std::string run_sentence(const std::string& sentence) {
         auto src = encode_sentence(sentence);
         const int64_t src_len = static_cast<int64_t>(src.size());
@@ -469,13 +540,15 @@ struct NeuralVerbalizer::Impl {
                          (long long)hshape[2], sum / hidden_buf.size(), amax);
         }
 
-        // --- step 0: full decoder [decoder_start] -> lang token ---
+        // --- step 0: decoder [decoder_start] -> lang token ---
         std::vector<int64_t> step0_ids{decoder_start};
         std::array<int64_t, 2> step0_shape{1, 1};
 
         std::vector<Ort::Value> feed0;
         std::vector<const char*> feed0_names;
-        for (auto& sl : full_slots) {
+        bool use_cache0 = false;
+        std::array<int64_t, 1> uc_shape{1};
+        auto add_step0 = [&](const Slot& sl) {
             feed0_names.push_back(sl.name.c_str());
             switch (sl.kind) {
                 case SlotKind::Ids:
@@ -491,14 +564,28 @@ struct NeuralVerbalizer::Impl {
                         mem, hidden_buf.data(), hidden_buf.size(),
                         hidden_shape.data(), hidden_shape.size()));
                     break;
+                case SlotKind::Past:
+                    feed0.push_back(make_empty_past(mem, sl.past_idx));
+                    break;
+                case SlotKind::UseCache:
+                    feed0.push_back(Ort::Value::CreateTensor<bool>(
+                        mem, &use_cache0, 1, uc_shape.data(), 1));
+                    break;
             }
+        };
+        if (merged_mode) {
+            for (auto& sl : past_slots) add_step0(sl);
+        } else {
+            for (auto& sl : full_slots) add_step0(sl);
         }
+        const auto& step0_out_names = merged_mode ? past_out_names : full_out_names;
         std::vector<const char*> feed0_out_names;
-        feed0_out_names.reserve(full_out_names.size());
-        for (auto& n : full_out_names) feed0_out_names.push_back(n.c_str());
-        auto res0 = dec_full.Run(Ort::RunOptions{nullptr},
-                                 feed0_names.data(), feed0.data(), feed0.size(),
-                                 feed0_out_names.data(), feed0_out_names.size());
+        feed0_out_names.reserve(step0_out_names.size());
+        for (auto& n : step0_out_names) feed0_out_names.push_back(n.c_str());
+        auto& step0_sess = merged_mode ? dec_merged : dec_full;
+        auto res0 = step0_sess.Run(Ort::RunOptions{nullptr},
+                                   feed0_names.data(), feed0.data(), feed0.size(),
+                                   feed0_out_names.data(), feed0_out_names.size());
 
         // logits: [1, 1, vocab]
         auto li = res0[0].GetTensorTypeAndShapeInfo().GetShape();
@@ -531,6 +618,7 @@ struct NeuralVerbalizer::Impl {
                 std::vector<Ort::Value> feed(past_slots.size());
                 std::vector<const char*> feed_names;
                 feed_names.reserve(past_slots.size());
+                bool use_cache_step = true;
                 for (size_t i = 0; i < past_slots.size(); ++i) {
                     auto& sl = past_slots[i];
                     feed_names.push_back(sl.name.c_str());
@@ -542,6 +630,13 @@ struct NeuralVerbalizer::Impl {
                             mem, mask.data(), mask.size(), shape.data(), 2);
                     } else if (sl.kind == SlotKind::Past) {
                         feed[i] = std::move(past[sl.past_idx]);
+                    } else if (sl.kind == SlotKind::EncHidden) {
+                        feed[i] = Ort::Value::CreateTensor<float>(
+                            mem, hidden_buf.data(), hidden_buf.size(),
+                            hidden_shape.data(), hidden_shape.size());
+                    } else if (sl.kind == SlotKind::UseCache) {
+                        feed[i] = Ort::Value::CreateTensor<bool>(
+                            mem, &use_cache_step, 1, uc_shape.data(), 1);
                     } else {
                         throw std::runtime_error("unexpected slot kind in dec_past");
                     }
@@ -549,9 +644,10 @@ struct NeuralVerbalizer::Impl {
                 std::vector<const char*> out_names;
                 out_names.reserve(past_out_names.size());
                 for (auto& n : past_out_names) out_names.push_back(n.c_str());
-                auto res = dec_past.Run(Ort::RunOptions{nullptr},
-                                        feed_names.data(), feed.data(), feed.size(),
-                                        out_names.data(), out_names.size());
+                auto& step_sess = merged_mode ? dec_merged : dec_past;
+                auto res = step_sess.Run(Ort::RunOptions{nullptr},
+                                         feed_names.data(), feed.data(), feed.size(),
+                                         out_names.data(), out_names.size());
 
                 auto ls = res[0].GetTensorTypeAndShapeInfo().GetShape();
                 int64_t nxt = argmax_last(res[0].GetTensorData<float>(), ls[1], ls[2]);

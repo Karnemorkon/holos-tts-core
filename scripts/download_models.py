@@ -52,14 +52,18 @@ def main() -> int:
     os.makedirs(args.out, exist_ok=True)
 
     # Ідемпотентність (compose auto-init): якщо всі файли вже на місці — виходимо.
+    # Підтримуємо обидві розкладки: стару (два decoders) і merged (один If-граф).
+    vb = os.path.join(args.out, "verbalizer/onnx-int8")
+    has_decoder = os.path.isfile(os.path.join(vb, "decoder_model_merged_quantized.onnx")) or (
+        os.path.isfile(os.path.join(vb, "decoder_model_quantized.onnx"))
+        and os.path.isfile(os.path.join(vb, "decoder_with_past_model_quantized.onnx"))
+    )
     required = list(FLAT_MAP.values()) + [
         "verbalizer/onnx-int8/config.json",
-        "verbalizer/onnx-int8/decoder_model_quantized.onnx",
-        "verbalizer/onnx-int8/decoder_with_past_model_quantized.onnx",
         "verbalizer/onnx-int8/encoder_model_quantized.onnx",
         "verbalizer/onnx-int8/sentencepiece.bpe.model",
     ]
-    if not args.force and all(
+    if not args.force and has_decoder and all(
         os.path.isfile(p := os.path.join(args.out, f)) and os.path.getsize(p) > 0
         for f in required
     ):
