@@ -23,7 +23,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             ninja-build pkg-config zlib1g-dev libssl-dev uuid-dev \
-            libc-ares-dev libjsoncpp-dev libsentencepiece-dev
+            libc-ares-dev libjsoncpp-dev libsentencepiece-dev \
+            binutils file squashfs-tools desktop-file-utils libfuse2
 
       - name: Cache ONNX Runtime
         id: ort-cache
@@ -43,6 +44,7 @@ jobs:
 
       - name: Configure
         run: |
+          # shellcheck disable=SC2016  # $ORIGIN must stay literal for the linker
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$PWD/dist/holos-tts-core" \
@@ -94,6 +96,29 @@ jobs:
           trap - EXIT
           echo "version=$VERSION" >> "$GITHUB_ENV"
 
+      - name: Build AppImage
+        run: |
+          packaging/appimage/make-appimage.sh \
+            "$PWD/dist/holos-tts-core" "$PWD/.model-cache"
+
+      - name: Smoke test AppImage
+        run: |
+          set -euo pipefail
+          APP="$PWD/$(find dist -maxdepth 1 -name 'holos-tts-core-*-x86_64.AppImage' -print -quit)"
+          VERSION="${version:?version env missing}"
+          export XDG_DATA_HOME="$RUNNER_TEMP/holos-appimage-data"
+          export HOLOS_SPEAKERS_DIR="$RUNNER_TEMP/holos-appimage-speakers"
+          export HOLOS_OPEN_BROWSER=0
+          rm -rf "$XDG_DATA_HOME" "$HOLOS_SPEAKERS_DIR"
+          mkdir -p "$XDG_DATA_HOME" "$HOLOS_SPEAKERS_DIR"
+          test "$("$APP" --version)" = "$VERSION"
+          "$APP" > /tmp/appimage.log 2>&1 &
+          echo $! > /tmp/appimage.pid
+          trap 'kill "$(cat /tmp/appimage.pid)" 2>/dev/null || true' EXIT
+          python3 "$GITHUB_WORKSPACE/scripts/smoke_api.py" http://127.0.0.1:8004 "$VERSION"
+          kill "$(cat /tmp/appimage.pid)" 2>/dev/null || true
+          trap - EXIT
+
       - name: Tar bundle
         run: |
           tar -C dist -czf "holos-tts-core-${version}-linux-x64.tar.gz" holos-tts-core
@@ -104,6 +129,12 @@ jobs:
         with:
           name: linux-x64
           path: holos-tts-core-*-linux-x64.tar.gz
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: dist/holos-tts-core-*-x86_64.AppImage
 
   windows:
     name: windows x64 bundle
@@ -261,6 +292,7 @@ jobs:
       - name: Checksums
         run: |
           cd dist
+          # shellcheck disable=SC2035  # glob over release artifacts is intentional
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
 

@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APPDIR="${APPDIR:-$(cd "$(dirname "$(readlink -f "$0")")" && pwd)}"
+SELF="${APPIMAGE:-$0}"
+
+DATA_ROOT="${XDG_DATA_HOME:-${HOME:-/tmp}/.local/share}"
+DATA_DIR="$DATA_ROOT/holos-tts-core"
+
+export HOLOS_MODELS_DIR="${HOLOS_MODELS_DIR:-$APPDIR/usr/share/holos-tts/models}"
+export HOLOS_VERBALIZER_DIR="${HOLOS_VERBALIZER_DIR-$HOLOS_MODELS_DIR/verbalizer/gemma-int8}"
+export HOLOS_VOICE_ENCODER="${HOLOS_VOICE_ENCODER-$HOLOS_MODELS_DIR/voice_encoder.onnx}"
+export HOLOS_SPEAKERS_DIR="${HOLOS_SPEAKERS_DIR:-$DATA_DIR/speakers}"
+export HOLOS_HOST="${HOLOS_HOST:-127.0.0.1}"
+export HOLOS_PORT="${HOLOS_PORT:-8004}"
+export LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+case "${1:-}" in
+    --cli)
+        mkdir -p "$HOLOS_SPEAKERS_DIR" "$DATA_DIR"
+        shift
+        exec "$APPDIR/usr/bin/holos-cli" "$@"
+        ;;
+    --version)
+        exec "$APPDIR/usr/bin/holos-cli" version
+        ;;
+    --help|-h)
+        cat <<EOF
+HolosTTS AppImage
+
+Запуск:                 $SELF
+  --cli ...             CLI (holos-cli)
+  --version             версія
+  --help                ця довідка
+
+Змінні:
+  HOLOS_PORT            порт (типово 8004)
+  HOLOS_HOST            адреса (типово 127.0.0.1; 0.0.0.0 — LAN)
+  HOLOS_OPEN_BROWSER=0  не відкривати браузер
+  HOLOS_VERBALIZER_DIR=""  rule-only (без neural)
+  HOLOS_SPEAKERS_DIR    голоси (типово \$XDG_DATA_HOME/holos-tts-core/speakers)
+
+Дані та логи:           $DATA_DIR
+FUSE: якщо AppImage не монтується:
+  $SELF --appimage-extract-and-run
+EOF
+        exit 0
+        ;;
+esac
+
+if [ ! -s "$HOLOS_MODELS_DIR/holos_cpu_int8.onnx" ]; then
+    echo "Моделі не знайдено у $HOLOS_MODELS_DIR" >&2
+    exit 1
+fi
+
+mkdir -p "$HOLOS_SPEAKERS_DIR" "$DATA_DIR"
+
+BROWSER_HOST="$HOLOS_HOST"
+if [ "$BROWSER_HOST" = "0.0.0.0" ]; then
+    BROWSER_HOST="127.0.0.1"
+fi
+URL="http://$BROWSER_HOST:$HOLOS_PORT/"
+
+cd "$DATA_DIR"
+
+if [ "${HOLOS_OPEN_BROWSER:-1}" != "0" ] &&
+   { [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; }; then
+    (
+        i=0
+        while [ "$i" -lt 180 ]; do
+            if command -v curl >/dev/null 2>&1; then
+                curl -sf --max-time 2 "$URL/healthz" >/dev/null 2>&1 && break
+            elif (exec 3<>"/dev/tcp/$BROWSER_HOST/$HOLOS_PORT") 2>/dev/null; then
+                break
+            fi
+            sleep 1
+            i=$((i + 1))
+        done
+        if command -v xdg-open >/dev/null 2>&1; then
+            xdg-open "$URL" >/dev/null 2>&1 || true
+        fi
+    ) &
+fi
+
+echo "HolosTTS: $URL"
+echo "Дані та логи: $DATA_DIR  (Ctrl+C — зупинити)"
+exec "$APPDIR/usr/bin/holos-server"

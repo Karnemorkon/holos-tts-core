@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=HolosTTS
+GenericName=Ukrainian Text-to-Speech
+Comment=Нативний український TTS-сервер із клонуванням голосу
+Exec=holos-server
+Icon=holos-tts
+Terminal=true
+Categories=AudioVideo;Audio;
+Keywords=tts;speech;ukrainian;audio;voice;
+StartupNotify=true

@@ -1,0 +1,288 @@
+name: Attach AppImage to release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag
+        required: true
+        default: v0.6.1
+  push:
+    branches: [appimage-061]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: appimage-attach-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ORT_VERSION: "1.31.0"
+  TAG: ${{ github.event.inputs.tag || 'v0.6.1' }}
+
+jobs:
+  build:
+    name: Build AppImage
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || 'v0.6.1' }}
+          path: src
+
+      - name: Checkout packaging scripts
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          path: packaging-src
+          sparse-checkout: |
+            packaging
+            scripts
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build pkg-config zlib1g-dev libssl-dev uuid-dev \
+            libc-ares-dev libjsoncpp-dev libsentencepiece-dev \
+            binutils file squashfs-tools desktop-file-utils libfuse2
+
+      - name: Overlay AppImage packaging
+        run: |
+          mkdir -p src/packaging src/scripts
+          cp -a packaging-src/packaging/appimage src/packaging/
+          cp -a packaging-src/packaging/linux/. src/packaging/linux/
+          cp -a packaging-src/scripts/smoke_api.py src/scripts/
+
+      - name: Cache ONNX Runtime
+        id: ort-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/ort
+          key: ort-${{ env.ORT_VERSION }}-linux-x64
+
+      - name: Install ONNX Runtime
+        if: steps.ort-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o /tmp/ort.tgz \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"
+          mkdir -p "$HOME/ort"
+          tar -xzf /tmp/ort.tgz -C "$HOME/ort" --strip-components=1
+          rm -f /tmp/ort.tgz
+
+      - name: Configure
+        working-directory: src
+        run: |
+          # shellcheck disable=SC2016  # $ORIGIN must stay literal for the linker
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/dist/holos-tts-core" \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN/../lib' \
+            -DHOLOS_WITH_ORT=ON \
+            -DHOLOS_ORT_ROOT="$HOME/ort" \
+            -DHOLOS_WITH_CT2=OFF \
+            -DHOLOS_WITH_VERBALIZER=ON \
+            -DHOLOS_WITH_SERVER=ON \
+            -DHOLOS_BUILD_TESTS=OFF \
+            -DBUILD_TESTING=OFF
+
+      - name: Build and install
+        working-directory: src
+        run: |
+          cmake --build build --parallel
+          cmake --install build
+
+      - name: Bundle runtime
+        working-directory: src
+        run: |
+          LD_LIBRARY_PATH="$HOME/ort/lib" \
+            packaging/linux/make-bundle.sh "$PWD/dist/holos-tts-core"
+
+      - name: Cache models
+        uses: actions/cache@v4
+        with:
+          path: src/.model-cache
+          key: holos-models-v1-${{ runner.os }}
+
+      - name: Download models
+        working-directory: src
+        run: |
+          HOLOS_MODELS_DIR="$PWD/.model-cache" \
+            dist/holos-tts-core/download-models.sh
+
+      - name: Build AppImage
+        working-directory: src
+        run: |
+          packaging/appimage/make-appimage.sh \
+            "$PWD/dist/holos-tts-core" "$PWD/.model-cache"
+
+      - name: Smoke test AppImage
+        working-directory: src
+        run: |
+          set -euo pipefail
+          APP="$(find dist -maxdepth 1 -name 'holos-tts-core-*-x86_64.AppImage' -print -quit)"
+          VERSION="$(dist/holos-tts-core/bin/holos-cli version)"
+          export XDG_DATA_HOME="$RUNNER_TEMP/holos-appimage-data"
+          export HOLOS_SPEAKERS_DIR="$RUNNER_TEMP/holos-appimage-speakers"
+          export HOLOS_OPEN_BROWSER=0
+          rm -rf "$XDG_DATA_HOME" "$HOLOS_SPEAKERS_DIR"
+          mkdir -p "$XDG_DATA_HOME" "$HOLOS_SPEAKERS_DIR"
+          test "$("$APP" --version)" = "$VERSION"
+          "$APP" > /tmp/appimage.log 2>&1 &
+          echo $! > /tmp/appimage.pid
+          trap 'kill "$(cat /tmp/appimage.pid)" 2>/dev/null || true' EXIT
+          python3 scripts/smoke_api.py http://127.0.0.1:8004 "$VERSION"
+          kill "$(cat /tmp/appimage.pid)" 2>/dev/null || true
+          trap - EXIT
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: holos-appimage
+          path: src/dist/holos-tts-core-*-x86_64.AppImage
+          if-no-files-found: error
+          retention-days: 7
+
+  test:
+    name: Smoke (${{ matrix.distro }})
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: debian12
+            image: debian:12
+          - distro: ubuntu24
+            image: ubuntu:24.04
+          - distro: fedora
+            image: fedora:latest
+          - distro: arch
+            image: archlinux:latest
+    steps:
+      - name: Checkout smoke script
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+
+      - name: Download AppImage
+        uses: actions/download-artifact@v4
+        with:
+          name: holos-appimage
+          path: dist
+
+      - name: Pull image
+        run: docker pull "${{ matrix.image }}"
+
+      - name: Run AppImage in container
+        run: |
+          set -euo pipefail
+          APP="$(find dist -maxdepth 1 -name 'holos-tts-core-*-x86_64.AppImage' -print -quit)"
+          chmod +x "$APP"
+          NAME="holos-appimage-${{ matrix.distro }}"
+          docker rm -f "$NAME" >/dev/null 2>&1 || true
+          docker run -d --name "$NAME" --network host \
+            -v "$PWD/dist:/dist:ro" \
+            -e APPIMAGE_EXTRACT_AND_RUN=1 \
+            -e HOLOS_OPEN_BROWSER=0 \
+            -e HOLOS_PORT=8004 \
+            -e XDG_DATA_HOME=/tmp/holos-data \
+            -e HOLOS_SPEAKERS_DIR=/tmp/holos-speakers \
+            "${{ matrix.image }}" \
+            /bin/sh -c "exec /dist/$(basename "$APP")"
+          for _ in $(seq 1 180); do
+            if curl -sf --max-time 2 http://127.0.0.1:8004/healthz >/dev/null 2>&1; then
+              break
+            fi
+            if ! docker ps --format '{{.Names}}' | grep -qx "$NAME"; then
+              echo "container exited early" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          python3 scripts/smoke_api.py http://127.0.0.1:8004 0.6.1
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker logs "holos-appimage-${{ matrix.distro }}" 2>&1 | tail -100 || true
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f "holos-appimage-${{ matrix.distro }}" >/dev/null 2>&1 || true
+
+  attach:
+    name: Attach to release
+    needs: [build, test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Download AppImage
+        uses: actions/download-artifact@v4
+        with:
+          name: holos-appimage
+          path: dist
+
+      - name: Verify release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+
+      - name: Upload AppImage
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          APP="$(find dist -maxdepth 1 -name 'holos-tts-core-*-x86_64.AppImage' -print -quit)"
+          gh release upload "$TAG" "$APP" --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Rebuild SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'holos-tts-core-*-linux-x64.tar.gz' --dir release-assets --clobber
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'holos-tts-core-*-windows-x64.zip' --dir release-assets --clobber
+          find dist -name 'holos-tts-core-*-x86_64.AppImage' \
+            -exec cp {} release-assets/ \;
+          (
+            cd release-assets
+            sha256sum holos-tts-core-* > SHA256SUMS
+            sha256sum -c SHA256SUMS
+            cat SHA256SUMS
+          )
+          gh release upload "$TAG" release-assets/SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Verify uploaded checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p verify
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern SHA256SUMS --dir verify --clobber
+          diff -u release-assets/SHA256SUMS verify/SHA256SUMS
+
+      - name: Update release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > /tmp/notes.md
+          if grep -q 'x86_64.AppImage' /tmp/notes.md; then
+            echo 'release notes already mention AppImage'
+            exit 0
+          fi
+          {
+            cat /tmp/notes.md
+            printf '\n\n### AppImage (x86_64, models embedded)\n\n'
+            printf -- '- **holos-tts-core-%s-x86_64.AppImage** — self-contained; models included; terminal launch.\n' "${TAG#v}"
+            printf -- '- Install FUSE2 (libfuse2/fuse2/fuse-libs) or run with --appimage-extract-and-run.\n'
+          } > /tmp/notes-appimage.md
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file /tmp/notes-appimage.md
