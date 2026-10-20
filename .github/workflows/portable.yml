@@ -2,7 +2,6 @@ name: Portable builds
 
 on:
   push:
-    branches: [m10-portable]
     tags: ["v*"]
   workflow_dispatch:
 
