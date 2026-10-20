@@ -7,8 +7,6 @@ on:
         description: Release tag
         required: true
         default: v0.6.1
-  push:
-    branches: [appimage-061]
 
 permissions:
   contents: write
