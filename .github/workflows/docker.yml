@@ -14,9 +14,32 @@ concurrency:
   group: docker-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  IMAGE: morkon06/holostts-core
+
 jobs:
+  # PR: лише перевірка збірки amd64, без публікації.
+  pr-build:
+    name: build (PR, amd64)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=buildkit-core-linux-amd64
+          cache-to: type=gha,mode=max,scope=buildkit-core-linux-amd64
+
+  # amd64+arm64 нативно (без QEMU), кожен — push-by-digest.
   build:
     name: build (${{ matrix.platform }})
+    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:
@@ -25,17 +48,158 @@ jobs:
         include:
           - platform: linux/amd64
             runner: ubuntu-latest
-          # ARM64 (у дорожній карті): додати
-          # - platform: linux/arm64
-          #   runner: ubuntu-24.04-arm
-          # і публікувати маніфест через buildx imagetools (як у HolosTTS-hybrid).
+            pair: linux-amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            pair: linux-arm64
     steps:
       - uses: actions/checkout@v4
 
       - uses: docker/setup-buildx-action@v3
 
       - name: Login to Docker Hub
-        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=buildkit-core-${{ matrix.pair }}
+          cache-to: type=gha,mode=max,scope=buildkit-core-${{ matrix.pair }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          echo "${{ steps.build.outputs.digest }}" > "/tmp/digests/${{ matrix.pair }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.pair }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Runtime-перевірка arm64-образу до публікації маніфесту: healthz, синтез,
+  # enroll/delete клону. Якщо падає — latest не оновлюється.
+  smoke-arm64:
+    name: smoke (linux/arm64)
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: digests-linux-arm64
+          path: /tmp/digests
+
+      - name: Pull arm64 image by digest
+        id: image
+        run: |
+          digest=$(cat /tmp/digests/linux-arm64)
+          docker pull "$IMAGE@$digest"
+          echo "ref=$IMAGE@$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Cache models
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: holos-models-v1
+
+      - name: Download models (only if cache miss)
+        run: |
+          if [ ! -f models/holos_cpu_int8.onnx ]; then
+            python3 -m venv .venv
+            .venv/bin/pip install -q huggingface_hub
+            .venv/bin/python scripts/download_models.py --out models
+          fi
+
+      - name: Run container
+        run: |
+          mkdir -p speakers
+          docker run -d --name holos-smoke -p 8004:8004 \
+            -v "$PWD/models:/app/models:ro" \
+            -v "$PWD/speakers:/app/speakers" \
+            "${{ steps.image.outputs.ref }}"
+
+      - name: Smoke (healthz, synth, clone)
+        run: |
+          for i in $(seq 1 90); do
+            if curl -sf --max-time 3 http://127.0.0.1:8004/healthz -o /tmp/healthz.json; then break; fi
+            sleep 2
+          done
+          cat /tmp/healthz.json
+          jq -e '.status == "ok" and .cloning == true and (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' /tmp/healthz.json
+          curl -sf -X POST http://127.0.0.1:8004/api/synthesize \
+            -H 'Content-Type: application/json' \
+            -d '{"text":"Привіт, світе! Це тест синтезу мовлення українською.","voice":"Speaker_43"}' \
+            -o /tmp/synth.json
+          jq -e '.audio_base64 | length > 10000' /tmp/synth.json
+          python3 - <<'EOF'
+          import base64, json, math, struct, urllib.request, wave
+
+          sr, secs = 16000, 5
+          with wave.open('/tmp/prompt.wav', 'wb') as w:
+              w.setnchannels(1)
+              w.setsampwidth(2)
+              w.setframerate(sr)
+              frames = b''.join(
+                  struct.pack('<h', int(0.35 * 32767 * math.sin(2 * math.pi * 173 * i / sr)))
+                  for i in range(sr * secs))
+              w.writeframes(frames)
+
+          payload = {
+              'name': 'Smoke ARM',
+              'audio_base64': base64.b64encode(open('/tmp/prompt.wav', 'rb').read()).decode(),
+          }
+          req = urllib.request.Request(
+              'http://127.0.0.1:8004/api/voices',
+              data=json.dumps(payload).encode(),
+              headers={'Content-Type': 'application/json'}, method='POST')
+          r = json.load(urllib.request.urlopen(req))
+          assert r['status'] == 'ok' and r['voice'] == 'Smoke ARM', r
+          assert r['duration_sec'] >= 4.9, r
+
+          req = urllib.request.Request(
+              'http://127.0.0.1:8004/api/voices/Smoke%20ARM', method='DELETE')
+          r = json.load(urllib.request.urlopen(req))
+          assert r['status'] == 'ok', r
+          print('arm64 clone smoke ok')
+          EOF
+
+      - name: Logs on failure
+        if: failure()
+        run: docker logs holos-smoke 2>&1 | tail -50
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f holos-smoke || true
+
+  # Публікація маніфесту лише після успішного arm64-смоуку.
+  publish:
+    name: publish manifest
+    if: github.event_name != 'pull_request'
+    needs: [build, smoke-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -44,19 +208,20 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: morkon06/holostts-core
+          images: ${{ env.IMAGE }}
           tags: |
             type=semver,pattern={{version}}
             type=sha,format=short
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
 
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/Dockerfile
-          platforms: ${{ matrix.platform }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=buildkit-core-${{ matrix.platform }}
-          cache-to: type=gha,mode=max,scope=buildkit-core-${{ matrix.platform }}
+      - name: Create manifest list and push
+        env:
+          METADATA_JSON: ${{ steps.meta.outputs.json }}
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<<"$METADATA_JSON") \
+            $(printf "$IMAGE@%s " $(cat *))
+
+      - name: Inspect image
+        run: docker buildx imagetools inspect ${{ env.IMAGE }}:latest

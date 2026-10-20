@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(holos-tts-core VERSION 0.1.0 LANGUAGES CXX)
+project(holos-tts-core VERSION 0.5.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -87,6 +87,7 @@ endif()
 # --- CLI --------------------------------------------------------------------
 add_executable(holos-cli src/cli/holos_cli.cpp)
 target_link_libraries(holos-cli PRIVATE holos_core)
+target_compile_definitions(holos-cli PRIVATE HOLOS_VERSION="${PROJECT_VERSION}")
 
 # --- server (M2) ------------------------------------------------------------
 if(HOLOS_WITH_SERVER)

@@ -4,3 +4,4 @@ add_executable(holos-server
   src/main.cpp
 )
 target_link_libraries(holos-server PRIVATE holos_core drogon trantor)
+target_compile_definitions(holos-server PRIVATE HOLOS_VERSION="${PROJECT_VERSION}")

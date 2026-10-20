@@ -29,6 +29,10 @@
 #include <thread>
 #include <vector>
 
+#ifndef HOLOS_VERSION
+#define HOLOS_VERSION "0.5.0"
+#endif
+
 using namespace drogon;
 
 namespace {
@@ -949,6 +953,7 @@ int main() {
                 Json::Value j;
                 j["status"] = "ok";
                 j["engine"] = "holos-tts-core-native";
+                j["version"] = HOLOS_VERSION;
                 j["provider"] = "CPUExecutionProvider";
                 j["threads"] = g_engine.synth->intra_threads();
                 j["stress"] = "dictionary-A";

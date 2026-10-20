@@ -51,7 +51,7 @@ curl http://localhost:8004/healthz
 ```
 
 Ознака готовності:
-`{"status":"ok","engine":"holos-tts-core-native","verbalizer":"neural+rule","cloning":true,...}`.
+`{"status":"ok","engine":"holos-tts-core-native","version":"0.5.0","verbalizer":"neural+rule","cloning":true,...}`.
 
 Потрібен Docker + Compose і ≥2 ГБ RAM (neural-дефолт тримає ~1.1 ГБ RSS; rule-only — ~468 МБ).
 Сервіс `downloader` у compose завантажує лише відсутні файли, тож оновлення образу не тягне
@@ -109,8 +109,10 @@ services:
 python3 scripts/download_models.py --out models`) і змонтувати каталог
 `-v $PWD/models:/app/models:ro` замість named volume.
 
-Теги: `latest` — поточна `main` (linux/amd64); `sha-<короткий>` — конкретний коміт;
-`vX.Y.Z` — пін релізу. ARM64-образ — у дорожній карті (див. нижче).
+Теги: `latest` — поточна `main`, multi-arch **linux/amd64 + linux/arm64**;
+`sha-<короткий>` — конкретний коміт; `vX.Y.Z` (наприклад `0.5.0`) — пін релізу.
+arm64-образ збирається нативно та проходить runtime-смоук (healthz + синтез + клон)
+у CI перед публікацією маніфесту.
 
 ## Клонування голосу
 
@@ -170,7 +172,7 @@ curl -s http://localhost:8004/api/verbalize \
 
 ```bash
 curl -s http://localhost:8004/api/voices   # {"voices":[...],"custom":[...],"cloning":true}
-curl -s http://localhost:8004/healthz      # статус, провайдер, потоки, verbalizer, cloning
+curl -s http://localhost:8004/healthz      # статус, version, провайдер, потоки, verbalizer, cloning
 ```
 
 ### `POST /v1/audio/speech` (OpenAI-сумісний)
@@ -233,12 +235,12 @@ asyncio.run(main())
 
 | Тег | Архітектури | Для чого |
 |---|---|---|
-| `latest` (**дефолт**) | linux/amd64 | будь-які x86-64 CPU (перевірено на Xeon E5-2650, AVX без AVX2) |
-| `sha-<короткий>` | linux/amd64 | пін конкретного коміту |
-| `vX.Y.Z` | linux/amd64 | пін релізу |
+| `latest` (**дефолт**) | linux/amd64 + linux/arm64 | x86-64 (перевірено на Xeon E5-2650, AVX без AVX2), Raspberry Pi 4/5, ARM-сервери, Apple Silicon (Docker) |
+| `sha-<короткий>` | linux/amd64 + linux/arm64 | пін конкретного коміту |
+| `vX.Y.Z` (напр. `0.5.0`) | linux/amd64 + linux/arm64 | пін релізу |
 
-ARM64 (Raspberry Pi 4/5, ARM-сервери, Apple Silicon) — у дорожній карті: Dockerfile уже
-містить гілку `TARGETARCH=arm64` (ORT aarch64), потрібні нативні runners + маніфест.
+ARM64 збирається нативно (`ubuntu-24.04-arm`, без QEMU), маніфест публікується лише
+після runtime-смоуку arm64 у CI. Windows ARM64 — у дорожній карті.
 
 Ліміти контейнера (`cpus: "12.0"`, `memory: 3g`) задані у `docker-compose.yml` — правте
 під свій хост. Для rule-only конфігу задайте `HOLOS_VERBALIZER_DIR=""` у environment
@@ -364,7 +366,8 @@ ctest --test-dir build -R "voice_encoder|audio_io|custom_voices"
 
 Повний ctest — 81 тест (єдина відома невдача — upstream Drogon `CookieSameSite`,
 не повʼязана з проєктом). CI збирає конфіг `ORT=ON, SERVER=OFF`, проганяє тести без
-моделей, а окремий workflow збирає й публікує Docker-образ.
+моделей, а `docker.yml` збирає amd64+arm64, проганяє arm64-смоук і публікує маніфест
+(`latest`, `sha-*`, `v*`).
 
 Запуск нативного бінарника:
 
@@ -403,13 +406,14 @@ docker/        multi-stage Dockerfile
 - **M8** ✅ клонування голосу: voice encoder ONNX int8 (80 МБ, 24 кГц → 256),
   mask-free StyleEncoder export, `POST/DELETE /api/voices`, UI-панель,
   `speakers/*.npy` (numpy/hybrid-сумісні), golden cos 0.99998
+- **M9** ✅ ARM64: multi-arch маніфест amd64+arm64 нативними runners (без QEMU),
+  runtime-смоук arm64 (healthz + синтез + enroll/delete клону) перед публікацією `latest`
 
 Надалі:
 
-- **ARM64**: Raspberry Pi 4/5, ARM-сервери, Apple Silicon, Windows ARM64
-  (нативні arm64 runners + маніфест `latest`; Dockerfile уже має гілку `TARGETARCH=arm64`).
 - **Портативний застосунок без Docker**: Linux x64 (AppImage/static) і Windows x64
-  (zip + `holos-server.exe`), моделі — поруч із бінарником, UI — у браузері.
+  (zip + `holos-server.exe`), моделі — поруч із бінарником, UI — у браузері;
+  Windows ARM64 — після появи попиту.
 - **GPU**: CUDA/TensorRT/Vulkan-провайдери ORT — відкладено (CPU-цілі пріоритетні;
   на GPU очікується RTF < 0.05).
 - Граматика rule-вербалізатора, порядок `/api/voices`, CT2-вербалізація,
