@@ -126,6 +126,7 @@ jobs:
           export XDG_DATA_HOME="$RUNNER_TEMP/holos-appimage-data"
           export HOLOS_SPEAKERS_DIR="$RUNNER_TEMP/holos-appimage-speakers"
           export HOLOS_OPEN_BROWSER=0
+          export HOLOS_APPIMAGE_TERM=1
           rm -rf "$XDG_DATA_HOME" "$HOLOS_SPEAKERS_DIR"
           mkdir -p "$XDG_DATA_HOME" "$HOLOS_SPEAKERS_DIR"
           test "$("$APP" --version)" = "$VERSION"
@@ -187,6 +188,7 @@ jobs:
             -v "$PWD/dist:/dist:ro" \
             -e APPIMAGE_EXTRACT_AND_RUN=1 \
             -e HOLOS_OPEN_BROWSER=0 \
+            -e HOLOS_APPIMAGE_TERM=1 \
             -e HOLOS_PORT=8004 \
             -e XDG_DATA_HOME=/tmp/holos-data \
             -e HOLOS_SPEAKERS_DIR=/tmp/holos-speakers \
