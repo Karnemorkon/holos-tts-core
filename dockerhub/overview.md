@@ -68,7 +68,7 @@ Then open **http://localhost:8004/** and check readiness:
 
 ```bash
 curl http://localhost:8004/healthz
-# {"status":"ok","engine":"holos-tts-core-native","version":"0.6.0","cloning":true,...}
+# {"status":"ok","engine":"holos-tts-core-native","version":"0.6.1","cloning":true,...}
 ```
 
 ## Web UI and voice cloning
@@ -121,14 +121,14 @@ WebSocket: `/api/ws/synthesize` (PCM16 chunks).
 | `HOLOS_MODELS_DIR` | `/app/models` | Models directory (read-only) |
 | `HOLOS_VERBALIZER_DIR` | gemma-int8 | `neural` verbalizer dir; empty = `rule` only |
 | `HOLOS_SPEAKERS_DIR` | `/app/speakers` | Cloned voices (`speakers/*.npy`) |
-| `HOLOS_THREADS` | auto | ONNX threads, `0` = 80% of CPU cores |
+| `HOLOS_THREADS` | auto | ONNX threads, `0` = 80% of available cores (cgroup quota aware) |
 | `HOLOS_METRICS` | `0` | Per-request timings in logs/responses |
 | `HOLOS_VERBALIZER` | `neural` | `neural` / `rule` / `off` |
 
 ## Image tags
 
 - `latest` — latest release
-- `0.6.0` — pinned release
+- `0.6.1` — pinned release
 - `sha-<commit>` — immutable build
 
 ## Links
