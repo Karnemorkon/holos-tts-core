@@ -15,6 +15,7 @@ export HOLOS_VOICE_ENCODER="${HOLOS_VOICE_ENCODER-$HOLOS_MODELS_DIR/voice_encode
 export HOLOS_SPEAKERS_DIR="${HOLOS_SPEAKERS_DIR:-$DATA_DIR/speakers}"
 export HOLOS_HOST="${HOLOS_HOST:-127.0.0.1}"
 export HOLOS_PORT="${HOLOS_PORT:-8004}"
+HOST_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
 export LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 BROWSER_HOST="$HOLOS_HOST"
@@ -62,8 +63,17 @@ stop_server() {
     return 0
 }
 
+restore_host_ld() {
+    if [ -n "$HOST_LD_LIBRARY_PATH" ]; then
+        export LD_LIBRARY_PATH="$HOST_LD_LIBRARY_PATH"
+    else
+        unset LD_LIBRARY_PATH
+    fi
+}
+
 launch_in_terminal() {
     local t
+    restore_host_ld
     for t in konsole gnome-terminal xfce4-terminal mate-terminal \
              x-terminal-emulator kitty alacritty foot xterm; do
         command -v "$t" >/dev/null 2>&1 || continue
@@ -92,6 +102,7 @@ launch_in_terminal() {
 try_open() {
     local opener="$1"
     command -v "$opener" >/dev/null 2>&1 || return 1
+    restore_host_ld
     case "$opener" in
         gio)        gio open "$URL" ;;
         kioclient5) kioclient5 exec "$URL" ;;
