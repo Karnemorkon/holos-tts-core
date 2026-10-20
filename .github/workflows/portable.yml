@@ -111,6 +111,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg\installed
+          key: vcpkg-${{ runner.os }}-x64-windows-static-md-${{ hashFiles('cmake/deps.cmake', '.github/workflows/portable.yml') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-x64-windows-static-md-
+
       - name: Install vcpkg dependencies
         shell: pwsh
         run: |
@@ -149,7 +157,7 @@ jobs:
             -DHOLOS_WITH_SERVER=ON `
             -DHOLOS_BUILD_TESTS=OFF `
             -DHOLOS_USE_SYSTEM_DROGON=ON `
-            -DHOLOS_USE_SYSTEM_SENTENCEPIECE=ON
+            -DBUILD_SHARED_LIBS=OFF
 
       - name: Build and install
         shell: pwsh
