@@ -188,12 +188,23 @@ jobs:
           $env:HOLOS_MODELS_DIR = "$env:GITHUB_WORKSPACE\.model-cache"
           packaging\windows\download-models.ps1
 
+      - name: Inspect bundle
+        shell: pwsh
+        run: |
+          Get-ChildItem "$PWD\dist\holos-tts-core\bin" | Select-Object Name, Length | Format-Table
+          $dll = Get-Item "$PWD\dist\holos-tts-core\bin\onnxruntime.dll" -ErrorAction SilentlyContinue
+          if (-not $dll) { throw "onnxruntime.dll missing from bundle" }
+          "bundle ORT: $($dll.VersionInfo.FileVersion)"
+          Get-ChildItem C:\ort -Recurse -Filter onnxruntime.dll |
+            ForEach-Object { "ort tree: $($_.FullName) $($_.VersionInfo.FileVersion)" }
+
       - name: Smoke test bundle
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $bundle = "$PWD\dist\holos-tts-core"
           $version = & "$bundle\bin\holos-cli.exe" version
+          $env:PATH = "$bundle\bin;$env:PATH"
           $env:HOLOS_MODELS_DIR = "$env:GITHUB_WORKSPACE\.model-cache"
           $env:HOLOS_VERBALIZER_DIR = "$env:HOLOS_MODELS_DIR\verbalizer\gemma-int8"
           $env:HOLOS_SPEAKERS_DIR = "$env:GITHUB_WORKSPACE\.speakers"
