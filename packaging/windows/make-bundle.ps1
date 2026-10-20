@@ -19,10 +19,12 @@ Copy-Item "$Here\README.txt" $Prefix
 New-Item -ItemType Directory -Force -Path (Join-Path $Prefix "models"), (Join-Path $Prefix "speakers") | Out-Null
 
 if ($OrtBin) {
-    $dll = Get-ChildItem -Path $OrtBin -Filter "onnxruntime*.dll" -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    if (-not $dll) { throw "onnxruntime dll not found in $OrtBin" }
-    Copy-Item $dll.FullName (Join-Path $Prefix "bin")
+    $dlls = @(Get-ChildItem -Path $OrtBin -Filter "onnxruntime*.dll" -ErrorAction SilentlyContinue)
+    if (-not $dlls) { throw "onnxruntime dll not found in $OrtBin" }
+    if (-not ($dlls | Where-Object { $_.Name -eq "onnxruntime.dll" })) {
+        throw "onnxruntime.dll not found in $OrtBin"
+    }
+    $dlls | Copy-Item -Destination (Join-Path $Prefix "bin")
 }
 
 Write-Host "bundle ready: $Prefix"
