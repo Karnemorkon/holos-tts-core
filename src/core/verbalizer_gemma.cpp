@@ -1,6 +1,7 @@
 #include "verbalizer_gemma.h"
 
 #include "pcre2_util.h"
+#include "ort_path.h"
 
 #include <onnxruntime_cxx_api.h>
 
@@ -405,7 +406,7 @@ struct GemmaVerbalizer::Impl {
             sess_opts.SetIntraOpNumThreads(4);
             sess_opts.SetGraphOptimizationLevel(
                 GraphOptimizationLevel::ORT_ENABLE_ALL);
-            sess = Ort::Session(env, model_path.c_str(), sess_opts);
+            sess = Ort::Session(env, holos::ort_path(model_path).c_str(), sess_opts);
 
             bool has_ids = false, has_mask = false;
             size_t ni = sess.GetInputCount();

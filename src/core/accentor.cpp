@@ -1,4 +1,5 @@
 #include "accentor.h"
+#include "ort_path.h"
 
 #include <onnxruntime_cxx_api.h>
 
@@ -55,7 +56,7 @@ struct Accentor::Impl {
     Impl(const std::string& path) {
         opts.SetIntraOpNumThreads(1);
         opts.SetInterOpNumThreads(1);
-        session = std::make_unique<Ort::Session>(env, path.c_str(), opts);
+        session = std::make_unique<Ort::Session>(env, holos::ort_path(path).c_str(), opts);
     }
 };
 

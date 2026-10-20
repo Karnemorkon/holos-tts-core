@@ -1,5 +1,6 @@
 #include "synth.h"
 #include "cpu.h"
+#include "ort_path.h"
 
 #include <onnxruntime_cxx_api.h>
 
@@ -72,7 +73,7 @@ struct Synthesizer::Impl {
         opts.SetIntraOpNumThreads(intra);
         opts.SetInterOpNumThreads(1);
         opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-        session = std::make_unique<Ort::Session>(env, path.c_str(), opts);
+        session = std::make_unique<Ort::Session>(env, holos::ort_path(path).c_str(), opts);
 
         Ort::AllocatorWithDefaultOptions alloc;
         std::vector<InputSpec> specs;

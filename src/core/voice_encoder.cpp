@@ -1,5 +1,6 @@
 #include "voice_encoder.h"
 #include "cpu.h"
+#include "ort_path.h"
 
 #include <onnxruntime_cxx_api.h>
 
@@ -46,7 +47,7 @@ struct VoiceEncoder::Impl {
         // буфери після кожного Run замість арени (мінус ~0.9 ГБ після піку).
         opts.DisableMemPattern();
         opts.DisableCpuMemArena();
-        session = std::make_unique<Ort::Session>(*env, path.c_str(), opts);
+        session = std::make_unique<Ort::Session>(*env, holos::ort_path(path).c_str(), opts);
         Ort::AllocatorWithDefaultOptions alloc;
         in_name = std::string(session->GetInputNameAllocated(0, alloc).get());
         out_name = std::string(session->GetOutputNameAllocated(0, alloc).get());

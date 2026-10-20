@@ -1,6 +1,7 @@
 #include "verbalizer_neural.h"
 
 #include "verbalizer_gemma.h"
+#include "ort_path.h"
 
 #include <onnxruntime_cxx_api.h>
 
@@ -300,11 +301,11 @@ struct NeuralVerbalizer::Impl {
             sess_opts.SetIntraOpNumThreads(4);
             sess_opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
-            enc = Ort::Session(env, enc_path.c_str(), sess_opts);
+            enc = Ort::Session(env, holos::ort_path(enc_path).c_str(), sess_opts);
             if (!merged_path.empty())
-                dec_merged = Ort::Session(env, merged_path.c_str(), sess_opts);
+                dec_merged = Ort::Session(env, holos::ort_path(merged_path).c_str(), sess_opts);
             else
-                dec_full = Ort::Session(env, full_path.c_str(), sess_opts);
+                dec_full = Ort::Session(env, holos::ort_path(full_path).c_str(), sess_opts);
 
             // encoder names
             {
@@ -386,7 +387,7 @@ struct NeuralVerbalizer::Impl {
                 if (file_exists(past_path)) {
                     past_slots.clear();
                     past_in_names.clear();
-                    dec_past = Ort::Session(env, past_path.c_str(), sess_opts);
+                    dec_past = Ort::Session(env, holos::ort_path(past_path).c_str(), sess_opts);
                     if (!resolve_names(dec_past, true, past_slots, past_out_logits)) return false;
                     auto mo = dec_past.GetOutputCount();
                     for (size_t i = 0; i < mo; ++i) {
