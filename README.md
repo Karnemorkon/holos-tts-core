@@ -54,7 +54,7 @@ curl http://localhost:8004/healthz
 ```
 
 Ознака готовності:
-`{"status":"ok","engine":"holos-tts-core-native","version":"0.6.0","verbalizer":"neural+rule","cloning":true,...}`.
+`{"status":"ok","engine":"holos-tts-core-native","version":"0.6.1","verbalizer":"neural+rule","cloning":true,...}`.
 
 Потрібен Docker + Compose і ≥2 ГБ RAM (neural-дефолт тримає ~1.1 ГБ RSS; rule-only — ~468 МБ).
 Сервіс `downloader` у compose завантажує лише відсутні файли, тож оновлення образу не тягне
@@ -113,7 +113,7 @@ python3 scripts/download_models.py --out models`) і змонтувати кат
 `-v $PWD/models:/app/models:ro` замість named volume.
 
 Теги: `latest` — поточна `main`, multi-arch **linux/amd64 + linux/arm64**;
-`sha-<короткий>` — конкретний коміт; `vX.Y.Z` (наприклад `0.6.0`) — пін релізу.
+`sha-<короткий>` — конкретний коміт; `vX.Y.Z` (наприклад `0.6.1`) — пін релізу.
 arm64-образ збирається нативно та проходить runtime-смоук (healthz + синтез + клон)
 у CI перед публікацією маніфесту.
 
@@ -127,7 +127,7 @@ arm64-образ збирається нативно та проходить run
 **Linux x64** (glibc ≥ 2.35, тобто Ubuntu 22.04+; решта бібліотек у комплекті):
 
 ```bash
-tar xzf holos-tts-core-0.6.0-linux-x64.tar.gz
+tar xzf holos-tts-core-0.6.1-linux-x64.tar.gz
 cd holos-tts-core
 ./download-models.sh
 ./holos-tts.sh          # UI: http://127.0.0.1:8004/
@@ -136,7 +136,7 @@ cd holos-tts-core
 **Windows x64** (Windows 10/11 + Visual C++ Redistributable 2015-2022):
 
 ```powershell
-Expand-Archive holos-tts-core-0.6.0-windows-x64.zip -DestinationPath .
+Expand-Archive holos-tts-core-0.6.1-windows-x64.zip -DestinationPath .
 cd holos-tts-core
 powershell -ExecutionPolicy Bypass -File download-models.ps1
 holos-tts.bat
@@ -261,7 +261,7 @@ asyncio.run(main())
 | `HOLOS_SPEAKERS_DIR` | `/app/speakers` | каталог клонованих голосів (`*.npy`) |
 | `HOLOS_VERBALIZER_DIR` | `""` (rule-only) | neural verbalizer; порожній = rule |
 | `HOLOS_PORT` | `8004` | HTTP-порт |
-| `HOLOS_THREADS` | авто | потоки ONNX Runtime (0 = авто, 80% ядер) |
+| `HOLOS_THREADS` | авто | потоки ONNX Runtime (0 = авто: 80% доступних ядер, з урахуванням cgroup-квоти) |
 | `HOLOS_METRICS` | `0` | `1` = `[metrics]` логи + `timings` у відповідях (для бенчів) |
 
 ### Варіанти збірки (теги образу)
@@ -270,7 +270,7 @@ asyncio.run(main())
 |---|---|---|
 | `latest` (**дефолт**) | linux/amd64 + linux/arm64 | x86-64 (перевірено на Xeon E5-2650, AVX без AVX2), Raspberry Pi 4/5, ARM-сервери, Apple Silicon (Docker) |
 | `sha-<короткий>` | linux/amd64 + linux/arm64 | пін конкретного коміту |
-| `vX.Y.Z` (напр. `0.6.0`) | linux/amd64 + linux/arm64 | пін релізу |
+| `vX.Y.Z` (напр. `0.6.1`) | linux/amd64 + linux/arm64 | пін релізу |
 
 ARM64 збирається нативно (`ubuntu-24.04-arm`, без QEMU), маніфест публікується лише
 після runtime-смоуку arm64 у CI. Windows ARM64 — у дорожній карті.

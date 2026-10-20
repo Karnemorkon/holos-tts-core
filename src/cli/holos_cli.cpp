@@ -10,7 +10,7 @@
 #include "core/voices.h"
 
 #ifndef HOLOS_VERSION
-#define HOLOS_VERSION "0.6.0"
+#define HOLOS_VERSION "0.6.1"
 #endif
 
 static void usage() {

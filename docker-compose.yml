@@ -26,6 +26,7 @@ services:
       # neural (default) | rule | off — також перемикається per-request через UI/API
       - HOLOS_VERBALIZER_DIR=/app/models/verbalizer/gemma-int8
       - HOLOS_PORT=8004
+      - HOLOS_THREADS=${HOLOS_THREADS:-0}
       # клоновані голоси (speakers/*.npy), writable volume
       - HOLOS_SPEAKERS_DIR=/app/speakers
     volumes:
