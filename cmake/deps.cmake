@@ -30,7 +30,7 @@ FetchContent_MakeAvailable(pcre2)
 # utf8proc: Unicode normalization (NFKC) for text prep parity with Python unicodedata.
 FetchContent_Declare(utf8proc
   GIT_REPOSITORY https://github.com/JuliaStrings/utf8proc.git
-  GIT_TAG v2.9.0)
+  GIT_TAG v2.10.0)
 set(UTF8PROC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(UTF8PROC_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(utf8proc)
