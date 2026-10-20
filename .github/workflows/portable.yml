@@ -53,7 +53,8 @@ jobs:
             -DHOLOS_WITH_CT2=OFF \
             -DHOLOS_WITH_VERBALIZER=ON \
             -DHOLOS_WITH_SERVER=ON \
-            -DHOLOS_BUILD_TESTS=OFF
+            -DHOLOS_BUILD_TESTS=OFF \
+            -DBUILD_TESTING=OFF
 
       - name: Build and install
         run: |
@@ -115,9 +116,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\vcpkg\installed
-          key: vcpkg-${{ runner.os }}-x64-windows-static-md-${{ hashFiles('cmake/deps.cmake', '.github/workflows/portable.yml') }}
+          key: vcpkg-${{ runner.os }}-x64-windows-static-md
           restore-keys: |
-            vcpkg-${{ runner.os }}-x64-windows-static-md-
+            vcpkg-${{ runner.os }}-x64-windows-static-md
 
       - name: Install vcpkg dependencies
         shell: pwsh
@@ -130,7 +131,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\ort
-          key: ort-${{ env.ORT_VERSION }}-win-x64
+          key: ort-${{ env.ORT_VERSION }}-win-x64-flat
 
       - name: Install ONNX Runtime
         if: steps.ort-cache.outputs.cache-hit != 'true'
@@ -141,7 +142,8 @@ jobs:
             -Uri "https://github.com/microsoft/onnxruntime/releases/download/v$env:ORT_VERSION/onnxruntime-win-x64-$env:ORT_VERSION.zip" `
             -OutFile "$env:RUNNER_TEMP\ort.zip"
           Expand-Archive "$env:RUNNER_TEMP\ort.zip" -DestinationPath "$env:RUNNER_TEMP\ort" -Force
-          Copy-Item "$env:RUNNER_TEMP\ort\*" C:\ort -Recurse -Force
+          $inner = Get-ChildItem "$env:RUNNER_TEMP\ort" -Directory | Select-Object -First 1
+          Copy-Item "$($inner.FullName)\*" C:\ort -Recurse -Force
 
       - name: Configure
         shell: pwsh
@@ -156,6 +158,7 @@ jobs:
             -DHOLOS_WITH_VERBALIZER=ON `
             -DHOLOS_WITH_SERVER=ON `
             -DHOLOS_BUILD_TESTS=OFF `
+            -DBUILD_TESTING=OFF `
             -DHOLOS_USE_SYSTEM_DROGON=ON `
             -DBUILD_SHARED_LIBS=OFF
 
