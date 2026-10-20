@@ -227,7 +227,8 @@ jobs:
       - name: Zip bundle
         shell: pwsh
         run: |
-          $version = (Get-Content $env:GITHUB_ENV | Select-String '^version=').ToString().Split('=')[1]
+          $version = $env:version
+          if (-not $version) { throw "version env missing" }
           Push-Location dist
           Compress-Archive -Path holos-tts-core -DestinationPath "..\holos-tts-core-$version-windows-x64.zip" -Force
           Pop-Location
