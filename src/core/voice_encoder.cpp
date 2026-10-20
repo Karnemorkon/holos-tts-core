@@ -1,4 +1,5 @@
 #include "voice_encoder.h"
+#include "cpu.h"
 
 #include <onnxruntime_cxx_api.h>
 
@@ -37,10 +38,7 @@ struct VoiceEncoder::Impl {
     void load() const {
         env = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "holos-voice-encoder");
         Ort::SessionOptions opts;
-        const int threads =
-            intra > 0 ? intra
-                      : static_cast<int>(std::min<unsigned>(
-                            std::thread::hardware_concurrency(), 9u));
+        const int threads = intra > 0 ? intra : default_onnx_threads();
         opts.SetIntraOpNumThreads(threads);
         opts.SetInterOpNumThreads(1);
         opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);

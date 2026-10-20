@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(holos-tts-core VERSION 0.5.0 LANGUAGES CXX)
+project(holos-tts-core VERSION 0.6.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -16,6 +16,8 @@ option(HOLOS_WITH_CT2 "Enable CTranslate2 (verbalizer/stress neural models)" OFF
 option(HOLOS_WITH_VERBALIZER "Neural verbalizer (M2M100 ONNX int8 + SentencePiece)" ON)
 option(HOLOS_WITH_SERVER "Build the Drogon HTTP/WS server" OFF)
 option(HOLOS_BUILD_TESTS "Build unit/golden tests" ON)
+option(HOLOS_USE_SYSTEM_DROGON "Use find_package(Drogon) instead of FetchContent" OFF)
+option(HOLOS_USE_SYSTEM_SENTENCEPIECE "Use find_package(sentencepiece) instead of system paths" OFF)
 
 # ONNX Runtime: prebuilt tarball dir (contains include/ + lib/). Set -DHOLOS_ORT_ROOT=...
 set(HOLOS_ORT_ROOT "" CACHE PATH "Path to extracted onnxruntime prebuilt (include/, lib/)")
@@ -69,19 +71,24 @@ if(HOLOS_WITH_VERBALIZER)
   if(NOT HOLOS_WITH_ORT)
     message(FATAL_ERROR "HOLOS_WITH_VERBALIZER requires HOLOS_WITH_ORT=ON")
   endif()
-  find_path(SENTENCEPIECE_INCLUDE_DIR sentencepiece_processor.h
-    HINTS /usr/include /usr/local/include)
-  find_library(SENTENCEPIECE_LIBRARY sentencepiece
-    HINTS /usr/lib /usr/lib/x86_64-linux-gnu /usr/local/lib)
-  if(NOT SENTENCEPIECE_INCLUDE_DIR OR NOT SENTENCEPIECE_LIBRARY)
-    message(FATAL_ERROR "SentencePiece not found (apt install libsentencepiece-dev) "
-      "or configure with -DHOLOS_WITH_VERBALIZER=OFF")
-  endif()
   target_sources(holos_core PRIVATE src/core/verbalizer_neural.cpp
                                 src/core/verbalizer_gemma.cpp)
   target_compile_definitions(holos_core PUBLIC HOLOS_WITH_VERBALIZER=1)
-  target_include_directories(holos_core PUBLIC ${SENTENCEPIECE_INCLUDE_DIR})
-  target_link_libraries(holos_core PUBLIC ${SENTENCEPIECE_LIBRARY})
+  if(HOLOS_USE_SYSTEM_SENTENCEPIECE)
+    find_package(sentencepiece CONFIG REQUIRED)
+    target_link_libraries(holos_core PUBLIC sentencepiece::sentencepiece)
+  else()
+    find_path(SENTENCEPIECE_INCLUDE_DIR sentencepiece_processor.h
+      HINTS /usr/include /usr/local/include)
+    find_library(SENTENCEPIECE_LIBRARY sentencepiece
+      HINTS /usr/lib /usr/lib/x86_64-linux-gnu /usr/local/lib)
+    if(NOT SENTENCEPIECE_INCLUDE_DIR OR NOT SENTENCEPIECE_LIBRARY)
+      message(FATAL_ERROR "SentencePiece not found (apt install libsentencepiece-dev) "
+        "or configure with -DHOLOS_WITH_VERBALIZER=OFF")
+    endif()
+    target_include_directories(holos_core PUBLIC ${SENTENCEPIECE_INCLUDE_DIR})
+    target_link_libraries(holos_core PUBLIC ${SENTENCEPIECE_LIBRARY})
+  endif()
 endif()
 
 # --- CLI --------------------------------------------------------------------

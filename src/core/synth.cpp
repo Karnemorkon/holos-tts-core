@@ -1,4 +1,5 @@
 #include "synth.h"
+#include "cpu.h"
 
 #include <onnxruntime_cxx_api.h>
 
@@ -67,9 +68,7 @@ struct Synthesizer::Impl {
 
     Impl(const std::string& path, int threads)
         : env(ORT_LOGGING_LEVEL_WARNING, "holos-tts-core") {
-        intra = threads > 0 ? threads
-                            : static_cast<int>(std::min<unsigned>(
-                                  std::thread::hardware_concurrency(), 9u));
+        intra = threads > 0 ? threads : default_onnx_threads();
         opts.SetIntraOpNumThreads(intra);
         opts.SetInterOpNumThreads(1);
         opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);

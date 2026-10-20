@@ -33,3 +33,8 @@ drogon.*.log
 
 # HF downloader cache (compose bind-mount)
 .hf_cache/
+
+# Portable build artifacts
+dist/
+dist-test/
+.model-cache/

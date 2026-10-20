@@ -1,0 +1,237 @@
+name: Portable builds
+
+on:
+  push:
+    branches: [m10-portable]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  ORT_VERSION: "1.31.0"
+
+jobs:
+  linux:
+    name: linux x64 bundle
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build pkg-config zlib1g-dev libssl-dev uuid-dev \
+            libc-ares-dev libjsoncpp-dev libsentencepiece-dev
+
+      - name: Cache ONNX Runtime
+        id: ort-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/ort
+          key: ort-${{ env.ORT_VERSION }}-linux-x64
+
+      - name: Install ONNX Runtime
+        if: steps.ort-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o /tmp/ort.tgz \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"
+          mkdir -p "$HOME/ort"
+          tar -xzf /tmp/ort.tgz -C "$HOME/ort" --strip-components=1
+          rm /tmp/ort.tgz
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/dist/holos-tts-core" \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN/../lib' \
+            -DHOLOS_WITH_ORT=ON \
+            -DHOLOS_ORT_ROOT="$HOME/ort" \
+            -DHOLOS_WITH_CT2=OFF \
+            -DHOLOS_WITH_VERBALIZER=ON \
+            -DHOLOS_WITH_SERVER=ON \
+            -DHOLOS_BUILD_TESTS=OFF
+
+      - name: Build and install
+        run: |
+          cmake --build build --parallel
+          cmake --install build
+
+      - name: Bundle runtime
+        run: |
+          LD_LIBRARY_PATH="$HOME/ort/lib" \
+            packaging/linux/make-bundle.sh "$PWD/dist/holos-tts-core"
+
+      - name: Cache models
+        uses: actions/cache@v4
+        with:
+          path: .model-cache
+          key: holos-models-v1-${{ runner.os }}
+
+      - name: Download models
+        run: |
+          HOLOS_MODELS_DIR="$PWD/.model-cache" \
+            dist/holos-tts-core/download-models.sh
+
+      - name: Smoke test bundle
+        run: |
+          set -euo pipefail
+          cd dist/holos-tts-core
+          VERSION="$(bin/holos-cli version)"
+          HOLOS_OPEN_BROWSER=0 \
+          HOLOS_MODELS_DIR="$GITHUB_WORKSPACE/.model-cache" \
+          HOLOS_VERBALIZER_DIR="$GITHUB_WORKSPACE/.model-cache/verbalizer/gemma-int8" \
+          HOLOS_VOICE_ENCODER="$GITHUB_WORKSPACE/.model-cache/voice_encoder.onnx" \
+          HOLOS_SPEAKERS_DIR="$GITHUB_WORKSPACE/.speakers" \
+            ./holos-tts.sh > /tmp/portable.log 2>&1 &
+          echo $! > /tmp/portable.pid
+          trap 'kill "$(cat /tmp/portable.pid)" 2>/dev/null || true' EXIT
+          python3 "$GITHUB_WORKSPACE/scripts/smoke_api.py" http://127.0.0.1:8004 "$VERSION"
+          kill "$(cat /tmp/portable.pid)" 2>/dev/null || true
+          trap - EXIT
+          echo "version=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Tar bundle
+        run: |
+          tar -C dist -czf "holos-tts-core-${version}-linux-x64.tar.gz" holos-tts-core
+          ls -lh holos-tts-core-*.tar.gz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: holos-tts-core-*-linux-x64.tar.gz
+
+  windows:
+    name: windows x64 bundle
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install vcpkg dependencies
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install `
+            drogon:x64-windows-static-md sentencepiece:x64-windows-static-md
+
+      - name: Cache ONNX Runtime
+        id: ort-cache
+        uses: actions/cache@v4
+        with:
+          path: C:\ort
+          key: ort-${{ env.ORT_VERSION }}-win-x64
+
+      - name: Install ONNX Runtime
+        if: steps.ort-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force C:\ort | Out-Null
+          Invoke-WebRequest -UseBasicParsing `
+            -Uri "https://github.com/microsoft/onnxruntime/releases/download/v$env:ORT_VERSION/onnxruntime-win-x64-$env:ORT_VERSION.zip" `
+            -OutFile "$env:RUNNER_TEMP\ort.zip"
+          Expand-Archive "$env:RUNNER_TEMP\ort.zip" -DestinationPath "$env:RUNNER_TEMP\ort" -Force
+          Copy-Item "$env:RUNNER_TEMP\ort\*" C:\ort -Recurse -Force
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S . -B build -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static-md `
+            -DCMAKE_INSTALL_PREFIX="$PWD\dist\holos-tts-core" `
+            -DHOLOS_WITH_ORT=ON `
+            -DHOLOS_ORT_ROOT="C:\ort" `
+            -DHOLOS_WITH_CT2=OFF `
+            -DHOLOS_WITH_VERBALIZER=ON `
+            -DHOLOS_WITH_SERVER=ON `
+            -DHOLOS_BUILD_TESTS=OFF `
+            -DHOLOS_USE_SYSTEM_DROGON=ON `
+            -DHOLOS_USE_SYSTEM_SENTENCEPIECE=ON
+
+      - name: Build and install
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --parallel
+          cmake --install build --config Release
+
+      - name: Bundle runtime
+        shell: pwsh
+        run: |
+          packaging\windows\make-bundle.ps1 -Prefix "$PWD\dist\holos-tts-core" -OrtBin "C:\ort\lib"
+
+      - name: Cache models
+        uses: actions/cache@v4
+        with:
+          path: .model-cache
+          key: holos-models-v1-${{ runner.os }}
+
+      - name: Download models
+        shell: pwsh
+        run: |
+          $env:HOLOS_MODELS_DIR = "$env:GITHUB_WORKSPACE\.model-cache"
+          packaging\windows\download-models.ps1
+
+      - name: Smoke test bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bundle = "$PWD\dist\holos-tts-core"
+          $version = & "$bundle\bin\holos-cli.exe" version
+          $env:HOLOS_MODELS_DIR = "$env:GITHUB_WORKSPACE\.model-cache"
+          $env:HOLOS_VERBALIZER_DIR = "$env:HOLOS_MODELS_DIR\verbalizer\gemma-int8"
+          $env:HOLOS_SPEAKERS_DIR = "$env:GITHUB_WORKSPACE\.speakers"
+          $env:HOLOS_HOST = "127.0.0.1"
+          $env:HOLOS_PORT = "8004"
+          $proc = Start-Process -FilePath "$bundle\bin\holos-server.exe" -PassThru -NoNewWindow `
+            -RedirectStandardOutput "$env:RUNNER_TEMP\holos.out" `
+            -RedirectStandardError "$env:RUNNER_TEMP\holos.err"
+          try {
+            python scripts/smoke_api.py http://127.0.0.1:8004 $version
+            if ($LASTEXITCODE -ne 0) { throw "smoke failed ($LASTEXITCODE)" }
+          } catch {
+            Get-Content "$env:RUNNER_TEMP\holos.out", "$env:RUNNER_TEMP\holos.err" -Tail 80
+            throw
+          } finally {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          }
+          "version=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Zip bundle
+        shell: pwsh
+        run: |
+          $version = (Get-Content $env:GITHUB_ENV | Select-String '^version=').ToString().Split('=')[1]
+          Push-Location dist
+          Compress-Archive -Path holos-tts-core -DestinationPath "..\holos-tts-core-$version-windows-x64.zip" -Force
+          Pop-Location
+          Get-Item holos-tts-core-*.zip | Format-List Name, Length
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: holos-tts-core-*-windows-x64.zip
+
+  release:
+    name: GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

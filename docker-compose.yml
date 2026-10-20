@@ -37,7 +37,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "12.0"
+          cpus: "${HOLOS_CPUS:-12.8}"
           memory: 3g
     memswap_limit: 3g
     logging:

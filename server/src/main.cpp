@@ -30,7 +30,7 @@
 #include <vector>
 
 #ifndef HOLOS_VERSION
-#define HOLOS_VERSION "0.5.0"
+#define HOLOS_VERSION "0.6.0"
 #endif
 
 using namespace drogon;
@@ -881,6 +881,7 @@ $("dlBtn").onclick=()=>{
 
 int main() {
     int port = env_int("HOLOS_PORT", 8004);
+    std::string host = env("HOLOS_HOST", "0.0.0.0");
     std::string models = env("HOLOS_MODELS_DIR", "/app/models");
     std::string trie = env("HOLOS_TRIE", models + "/stress.trie");
     std::string vocab = env("HOLOS_VOCAB", models + "/vocab.json");
@@ -931,7 +932,7 @@ int main() {
         // 24 МБ тіла = WAV до 16 МБ після base64-інфляції (~4/3).
         .setClientMaxBodySize(24 * 1024 * 1024)
         .setClientMaxMemoryBodySize(24 * 1024 * 1024)
-        .addListener("0.0.0.0", port)
+        .addListener(host, port)
         .registerHandler("/",
             [](const HttpRequestPtr&, std::function<void(const HttpResponsePtr&)>&& cb) {
                 auto resp = HttpResponse::newHttpResponse();

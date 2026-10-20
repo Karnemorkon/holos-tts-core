@@ -3,5 +3,9 @@
 add_executable(holos-server
   src/main.cpp
 )
-target_link_libraries(holos-server PRIVATE holos_core drogon trantor)
+if(HOLOS_USE_SYSTEM_DROGON)
+  target_link_libraries(holos-server PRIVATE holos_core Drogon::Drogon)
+else()
+  target_link_libraries(holos-server PRIVATE holos_core drogon trantor)
+endif()
 target_compile_definitions(holos-server PRIVATE HOLOS_VERSION="${PROJECT_VERSION}")

@@ -65,12 +65,16 @@ if(HOLOS_WITH_CT2)
 endif()
 
 if(HOLOS_WITH_SERVER)
-  FetchContent_Declare(drogon
-    GIT_REPOSITORY https://github.com/drogonframework/drogon.git
-    GIT_TAG v1.9.14)
-  set(BUILD_CTL OFF CACHE BOOL "" FORCE)
-  set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-  set(BUILD_ORM OFF CACHE BOOL "" FORCE)
-  set(HAS_YAML_CONFIG OFF CACHE BOOL "" FORCE)
-  FetchContent_MakeAvailable(drogon)
+  if(HOLOS_USE_SYSTEM_DROGON)
+    find_package(Drogon CONFIG REQUIRED)
+  else()
+    FetchContent_Declare(drogon
+      GIT_REPOSITORY https://github.com/drogonframework/drogon.git
+      GIT_TAG v1.9.14)
+    set(BUILD_CTL OFF CACHE BOOL "" FORCE)
+    set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(BUILD_ORM OFF CACHE BOOL "" FORCE)
+    set(HAS_YAML_CONFIG OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(drogon)
+  endif()
 endif()

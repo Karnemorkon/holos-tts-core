@@ -4,6 +4,7 @@
 [![Made in Ukraine](https://img.shields.io/badge/made_in-Ukraine-ffd700.svg?labelColor=0057b7)](https://stand-with-ukraine.pp.ua)
 [![CI](https://github.com/Karnemorkon/holos-tts-core/actions/workflows/ci.yml/badge.svg)](https://github.com/Karnemorkon/holos-tts-core/actions/workflows/ci.yml)
 [![Docker](https://github.com/Karnemorkon/holos-tts-core/actions/workflows/docker.yml/badge.svg)](https://github.com/Karnemorkon/holos-tts-core/actions/workflows/docker.yml)
+[![Portable](https://github.com/Karnemorkon/holos-tts-core/actions/workflows/portable.yml/badge.svg)](https://github.com/Karnemorkon/holos-tts-core/actions/workflows/portable.yml)
 [![Docker Hub](https://img.shields.io/badge/docker-morkon06%2Fholostts--core-blue)](https://hub.docker.com/r/morkon06/holostts-core)
 
 ---
@@ -36,6 +37,8 @@ Python у рантаймі. Перший запуск сам довантажу�
 - **Потоковий синтез**: REST-стрім (`/v1/audio/speech`) і WebSocket `/api/ws/synthesize` (PCM16-чанки)
 - **API-паритет з HolosTTS-hybrid**: тривалість аудіо Δ ≤0.02 с; та сама схема запитів/відповідей
 - **Docker**: multi-stage образ ~290 МБ, named volumes, healthcheck, ліміти CPU/RAM, ротація логів
+- **Портативні збірки без Docker**: Linux x64 (tar.gz) і Windows x64 (zip),
+  моделі довантажуються при першому запуску
 - **Тести**: 81 unit/golden-тест; golden-гейти verbalizer 46/46 і voice encoder cos 0.99998
 
 ## Швидкий старт
@@ -51,7 +54,7 @@ curl http://localhost:8004/healthz
 ```
 
 Ознака готовності:
-`{"status":"ok","engine":"holos-tts-core-native","version":"0.5.0","verbalizer":"neural+rule","cloning":true,...}`.
+`{"status":"ok","engine":"holos-tts-core-native","version":"0.6.0","verbalizer":"neural+rule","cloning":true,...}`.
 
 Потрібен Docker + Compose і ≥2 ГБ RAM (neural-дефолт тримає ~1.1 ГБ RSS; rule-only — ~468 МБ).
 Сервіс `downloader` у compose завантажує лише відсутні файли, тож оновлення образу не тягне
@@ -110,9 +113,39 @@ python3 scripts/download_models.py --out models`) і змонтувати кат
 `-v $PWD/models:/app/models:ro` замість named volume.
 
 Теги: `latest` — поточна `main`, multi-arch **linux/amd64 + linux/arm64**;
-`sha-<короткий>` — конкретний коміт; `vX.Y.Z` (наприклад `0.5.0`) — пін релізу.
+`sha-<короткий>` — конкретний коміт; `vX.Y.Z` (наприклад `0.6.0`) — пін релізу.
 arm64-образ збирається нативно та проходить runtime-смоук (healthz + синтез + клон)
 у CI перед публікацією маніфесту.
+
+
+## Портативна збірка (без Docker)
+
+Готові архіви — у [Releases](https://github.com/Karnemorkon/holos-tts-core/releases):
+`holos-tts-core-<версія>-linux-x64.tar.gz` і `holos-tts-core-<версія>-windows-x64.zip`.
+Моделі (~0.6 ГБ) не входять в архів — скрипт довантажує їх при першому запуску.
+
+**Linux x64** (glibc ≥ 2.35, тобто Ubuntu 22.04+; решта бібліотек у комплекті):
+
+```bash
+tar xzf holos-tts-core-0.6.0-linux-x64.tar.gz
+cd holos-tts-core
+./download-models.sh
+./holos-tts.sh          # UI: http://127.0.0.1:8004/
+```
+
+**Windows x64** (Windows 10/11 + Visual C++ Redistributable 2015-2022):
+
+```powershell
+Expand-Archive holos-tts-core-0.6.0-windows-x64.zip -DestinationPath .
+cd holos-tts-core
+powershell -ExecutionPolicy Bypass -File download-models.ps1
+holos-tts.bat
+```
+
+Типово сервіс слухає `127.0.0.1:8004`; `HOLOS_PORT` змінює порт, `HOLOS_HOST=0.0.0.0`
+відкриває для LAN (без автентифікації). Моделі та клоновані голоси лежать у `models/`
+і `speakers/` поруч із лаунчером, тож каталог можна переносити цілком. Типово
+використовується neural verbalizer і 80% ядер CPU для ONNX Runtime.
 
 ## Клонування голосу
 
@@ -228,7 +261,7 @@ asyncio.run(main())
 | `HOLOS_SPEAKERS_DIR` | `/app/speakers` | каталог клонованих голосів (`*.npy`) |
 | `HOLOS_VERBALIZER_DIR` | `""` (rule-only) | neural verbalizer; порожній = rule |
 | `HOLOS_PORT` | `8004` | HTTP-порт |
-| `HOLOS_THREADS` | авто | потоки ONNX Runtime (0 = авто) |
+| `HOLOS_THREADS` | авто | потоки ONNX Runtime (0 = авто, 80% ядер) |
 | `HOLOS_METRICS` | `0` | `1` = `[metrics]` логи + `timings` у відповідях (для бенчів) |
 
 ### Варіанти збірки (теги образу)
@@ -237,12 +270,12 @@ asyncio.run(main())
 |---|---|---|
 | `latest` (**дефолт**) | linux/amd64 + linux/arm64 | x86-64 (перевірено на Xeon E5-2650, AVX без AVX2), Raspberry Pi 4/5, ARM-сервери, Apple Silicon (Docker) |
 | `sha-<короткий>` | linux/amd64 + linux/arm64 | пін конкретного коміту |
-| `vX.Y.Z` (напр. `0.5.0`) | linux/amd64 + linux/arm64 | пін релізу |
+| `vX.Y.Z` (напр. `0.6.0`) | linux/amd64 + linux/arm64 | пін релізу |
 
 ARM64 збирається нативно (`ubuntu-24.04-arm`, без QEMU), маніфест публікується лише
 після runtime-смоуку arm64 у CI. Windows ARM64 — у дорожній карті.
 
-Ліміти контейнера (`cpus: "12.0"`, `memory: 3g`) задані у `docker-compose.yml` — правте
+Ліміти контейнера (`cpus: "${HOLOS_CPUS:-12.8}"` — 80% 16-ядерного хоста, `memory: 3g`) задані у `docker-compose.yml` — правте
 під свій хост. Для rule-only конфігу задайте `HOLOS_VERBALIZER_DIR=""` у environment
 (економія ~0.6 ГБ RSS).
 
@@ -409,11 +442,13 @@ docker/        multi-stage Dockerfile
 - **M9** ✅ ARM64: multi-arch маніфест amd64+arm64 нативними runners (без QEMU),
   runtime-смоук arm64 (healthz + синтез + enroll/delete клону) перед публікацією `latest`
 
+- **M10** ✅ портативні збірки без Docker: Linux x64 tar.gz + Windows x64 zip,
+  моделі довантажуються скриптом при першому запуску, смоук у CI перед релізом
+
 Надалі:
 
-- **Портативний застосунок без Docker**: Linux x64 (AppImage/static) і Windows x64
-  (zip + `holos-server.exe`), моделі — поруч із бінарником, UI — у браузері;
-  Windows ARM64 — після появи попиту.
+- **Windows ARM64** портативна збірка — після появи попиту.
+- **AppImage** для Linux — опційно, якщо tar.gz буде недостатньо.
 - **GPU**: CUDA/TensorRT/Vulkan-провайдери ORT — відкладено (CPU-цілі пріоритетні;
   на GPU очікується RTF < 0.05).
 - Граматика rule-вербалізатора, порядок `/api/voices`, CT2-вербалізація,
