@@ -76,10 +76,19 @@ if(HOLOS_WITH_VERBALIZER)
   target_sources(holos_core PRIVATE src/core/verbalizer_neural.cpp
                                 src/core/verbalizer_gemma.cpp)
   target_compile_definitions(holos_core PUBLIC HOLOS_WITH_VERBALIZER=1)
-  find_path(SENTENCEPIECE_INCLUDE_DIR sentencepiece_processor.h
-    HINTS /usr/include /usr/local/include)
-  find_library(SENTENCEPIECE_LIBRARY sentencepiece
-    HINTS /usr/lib /usr/lib/x86_64-linux-gnu /usr/local/lib)
+  if(DEFINED VCPKG_TARGET_TRIPLET)
+    find_path(SENTENCEPIECE_INCLUDE_DIR sentencepiece_processor.h
+      PATHS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include"
+      NO_DEFAULT_PATH)
+    find_library(SENTENCEPIECE_LIBRARY sentencepiece
+      PATHS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib"
+      NO_DEFAULT_PATH)
+  else()
+    find_path(SENTENCEPIECE_INCLUDE_DIR sentencepiece_processor.h
+      HINTS /usr/include /usr/local/include)
+    find_library(SENTENCEPIECE_LIBRARY sentencepiece
+      HINTS /usr/lib /usr/lib/x86_64-linux-gnu /usr/local/lib)
+  endif()
   if(NOT SENTENCEPIECE_INCLUDE_DIR OR NOT SENTENCEPIECE_LIBRARY)
     message(FATAL_ERROR "SentencePiece not found (apt install libsentencepiece-dev) "
       "or configure with -DHOLOS_WITH_VERBALIZER=OFF")

@@ -152,6 +152,7 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static-md `
             -DCMAKE_INSTALL_PREFIX="$PWD\dist\holos-tts-core" `
+            -DCMAKE_BUILD_TYPE=Release `
             -DHOLOS_WITH_ORT=ON `
             -DHOLOS_ORT_ROOT="C:\ort" `
             -DHOLOS_WITH_CT2=OFF `
@@ -166,7 +167,9 @@ jobs:
         shell: pwsh
         run: |
           cmake --build build --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --install build --config Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Bundle runtime
         shell: pwsh
