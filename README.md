@@ -133,17 +133,24 @@ chmod +x holos-tts-core-0.6.1-x86_64.AppImage
 ./holos-tts-core-0.6.1-x86_64.AppImage   # UI: http://127.0.0.1:8004/
 ```
 
-- Запускається у терміналі: логи видно одразу, `Ctrl+C` зупиняє сервер.
+- Подвійний клік (з Dolphin/менеджера файлів) відкриває **вікно терміналу** з логами;
+  потрібен один із: `konsole`, `gnome-terminal`, `xfce4-terminal`, `mate-terminal`,
+  `x-terminal-emulator`, `kitty`, `alacritty`, `foot`, `xterm`. Фонового «тихого»
+  запуску немає — без терміналу AppImage завершиться з підказкою.
+- Зупинка: `Ctrl+C` у вікні терміналу або `./holos-tts-core-0.6.1-x86_64.AppImage --stop`
+  (працює і для запущеного подвійним кліком; pid-файл + SIGTERM/SIGKILL).
+- Другий екземпляр одразу завершується з повідомленням «порт зайнятий».
 - Моделі вбудовані; перший запуск не потребує мережі.
-- Браузер відкривається автоматично; `HOLOS_OPEN_BROWSER=0` — без браузера
-  (зручно для SSH/headless).
+- Браузер відкривається автоматично після готовності сервера
+  (`HOLOS_OPEN_BROWSER=0` — без браузера); якщо не відкрився — див.
+  `~/.local/share/holos-tts-core/browser.log`.
 - Потрібен FUSE2: Debian/Ubuntu — `libfuse2` або `libfuse2t64`, Arch — `fuse2`,
   Fedora — `fuse-libs`. Без FUSE: `./holos-tts-core-0.6.1-x86_64.AppImage --appimage-extract-and-run`.
 - Дані, клоновані голоси й логи: `${XDG_DATA_HOME:-~/.local/share}/holos-tts-core`;
   `HOLOS_SPEAKERS_DIR` змінює каталог голосів.
 - `HOLOS_MODELS_DIR`, `HOLOS_VERBALIZER_DIR`, `HOLOS_VOICE_ENCODER` уже вказують
   на вбудовані моделі; `HOLOS_VERBALIZER_DIR=""` вмикає rule-only.
-- `--cli`, `--version`, `--help` — CLI та довідка.
+- `--cli`, `--version`, `--help`, `--stop` — CLI, довідка та зупинка.
 
 **Linux x64 tar.gz** (glibc ≥ 2.35, тобто Ubuntu 22.04+; решта бібліотек у комплекті):
 

@@ -6,6 +6,8 @@ SELF="${APPIMAGE:-$0}"
 
 DATA_ROOT="${XDG_DATA_HOME:-${HOME:-/tmp}/.local/share}"
 DATA_DIR="$DATA_ROOT/holos-tts-core"
+PIDFILE="$DATA_DIR/holos-server.pid"
+BROWSER_LOG="$DATA_DIR/browser.log"
 
 export HOLOS_MODELS_DIR="${HOLOS_MODELS_DIR:-$APPDIR/usr/share/holos-tts/models}"
 export HOLOS_VERBALIZER_DIR="${HOLOS_VERBALIZER_DIR-$HOLOS_MODELS_DIR/verbalizer/gemma-int8}"
@@ -15,23 +17,160 @@ export HOLOS_HOST="${HOLOS_HOST:-127.0.0.1}"
 export HOLOS_PORT="${HOLOS_PORT:-8004}"
 export LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
+BROWSER_HOST="$HOLOS_HOST"
+if [ "$BROWSER_HOST" = "0.0.0.0" ]; then
+    BROWSER_HOST="127.0.0.1"
+fi
+URL="http://$BROWSER_HOST:$HOLOS_PORT/"
+
+stop_server() {
+    if [ ! -f "$PIDFILE" ]; then
+        echo "HolosTTS не запущено (немає $PIDFILE)"
+        return 0
+    fi
+    local pid
+    pid="$(cat "$PIDFILE" 2>/dev/null || true)"
+    if ! [[ "$pid" =~ ^[0-9]+$ ]] || ! kill -0 "$pid" 2>/dev/null; then
+        rm -f "$PIDFILE"
+        echo "HolosTTS не запущено (застарілий pid-файл прибрано)"
+        return 0
+    fi
+    if [ -r "/proc/$pid/cmdline" ] &&
+       ! tr '\0' ' ' < "/proc/$pid/cmdline" | grep -q holos-server; then
+        rm -f "$PIDFILE"
+        echo "HolosTTS не запущено (pid $pid належить іншому процесу; застарілий pid-файл прибрано)"
+        return 0
+    fi
+    echo "Зупиняю HolosTTS (PID $pid)..."
+    kill "$pid" 2>/dev/null || true
+    local i=0
+    while [ "$i" -lt 10 ] && kill -0 "$pid" 2>/dev/null; do
+        sleep 1
+        i=$((i + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "SIGTERM не спрацював за 10 с — відправляю SIGKILL"
+        kill -9 "$pid" 2>/dev/null || true
+        sleep 1
+    fi
+    rm -f "$PIDFILE"
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "Не вдалося зупинити PID $pid" >&2
+        return 1
+    fi
+    echo "HolosTTS зупинено"
+    return 0
+}
+
+launch_in_terminal() {
+    local t
+    for t in konsole gnome-terminal xfce4-terminal mate-terminal \
+             x-terminal-emulator kitty alacritty foot xterm; do
+        command -v "$t" >/dev/null 2>&1 || continue
+        export HOLOS_APPIMAGE_TERM=1
+        echo "Подвійний клік: відкриваю вікно терміналу ($t)..."
+        case "$t" in
+            konsole)             exec konsole -e "$SELF" ;;
+            gnome-terminal)      exec gnome-terminal -- "$SELF" ;;
+            xfce4-terminal)      exec xfce4-terminal -e "$SELF" ;;
+            mate-terminal)       exec mate-terminal -e "$SELF" ;;
+            x-terminal-emulator) exec x-terminal-emulator -e "$SELF" ;;
+            kitty)               exec kitty "$SELF" ;;
+            alacritty)           exec alacritty -e "$SELF" ;;
+            foot)                exec foot "$SELF" ;;
+            xterm)               exec xterm -e "$SELF" ;;
+        esac
+        echo "Не вдалося запустити $t, пробую інший термінал..." >&2
+        unset HOLOS_APPIMAGE_TERM
+    done
+    echo "Не знайдено термінал (konsole, gnome-terminal, xfce4-terminal," >&2
+    echo "mate-terminal, x-terminal-emulator, kitty, alacritty, foot, xterm)." >&2
+    echo "Встановіть один із них або запустіть AppImage із вікна терміналу." >&2
+    return 1
+}
+
+try_open() {
+    local opener="$1"
+    command -v "$opener" >/dev/null 2>&1 || return 1
+    case "$opener" in
+        gio)        gio open "$URL" ;;
+        kioclient5) kioclient5 exec "$URL" ;;
+        kioclient)  kioclient exec "$URL" ;;
+        *)          "$opener" "$URL" ;;
+    esac
+}
+
+open_browser_later() {
+    (
+        (
+            i=0
+            ready=0
+            while [ "$i" -lt 180 ]; do
+                if command -v curl >/dev/null 2>&1; then
+                    if curl -sf --max-time 2 "$URL/healthz" >/dev/null 2>&1; then
+                        ready=1
+                        break
+                    fi
+                elif (exec 3<>"/dev/tcp/$BROWSER_HOST/$HOLOS_PORT") 2>/dev/null; then
+                    ready=1
+                    break
+                fi
+                sleep 1
+                i=$((i + 1))
+            done
+            {
+                ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+                if [ "$ready" -eq 0 ]; then
+                    printf '%s healthz не готовий за 180 с — браузер не відкрито\n' "$ts"
+                    exit 0
+                fi
+                for opener in xdg-open gio kde-open5 kioclient5 kioclient; do
+                    if try_open "$opener"; then
+                        printf '%s відкрито через %s: %s\n' "$ts" "$opener" "$URL"
+                        exit 0
+                    fi
+                    if command -v "$opener" >/dev/null 2>&1; then
+                        printf '%s %s не зміг відкрити %s\n' "$ts" "$opener" "$URL"
+                    fi
+                done
+                if [ -n "${BROWSER:-}" ]; then
+                    if try_open "$BROWSER"; then
+                        printf '%s відкрито через BROWSER=%s: %s\n' "$ts" "$BROWSER" "$URL"
+                        exit 0
+                    fi
+                    printf '%s BROWSER=%s не зміг відкрити %s\n' "$ts" "$BROWSER" "$URL"
+                fi
+                printf '%s жоден відкривач не спрацював\n' "$ts"
+            } >>"$BROWSER_LOG" 2>&1
+        ) &
+    )
+}
+
 case "${1:-}" in
     --cli)
-        mkdir -p "$HOLOS_SPEAKERS_DIR" "$DATA_DIR"
         shift
         exec "$APPDIR/usr/bin/holos-cli" "$@"
         ;;
     --version)
         exec "$APPDIR/usr/bin/holos-cli" version
         ;;
+    --stop)
+        stop_server
+        exit $?
+        ;;
     --help|-h)
         cat <<EOF
 HolosTTS AppImage
 
 Запуск:                 $SELF
+  (подвійний клік)      відкриває вікно терміналу з логами
   --cli ...             CLI (holos-cli)
   --version             версія
+  --stop                зупинити запущений сервер
   --help                ця довідка
+
+Зупинка:                Ctrl+C у вікні терміналу, або $SELF --stop
+                        (для подвійного кліку: --stop з будь-якого терміналу)
 
 Змінні:
   HOLOS_PORT            порт (типово 8004)
@@ -41,12 +180,20 @@ HolosTTS AppImage
   HOLOS_SPEAKERS_DIR    голоси (типово \$XDG_DATA_HOME/holos-tts-core/speakers)
 
 Дані та логи:           $DATA_DIR
+  holos-server.pid      PID запущеного сервера
+  browser.log           чому не відкрився браузер
+
 FUSE: якщо AppImage не монтується:
   $SELF --appimage-extract-and-run
 EOF
         exit 0
         ;;
 esac
+
+if [ -z "${HOLOS_APPIMAGE_TERM:-}" ] && [ ! -t 0 ] && [ ! -t 1 ]; then
+    launch_in_terminal
+    exit 1
+fi
 
 if [ ! -s "$HOLOS_MODELS_DIR/holos_cpu_int8.onnx" ]; then
     echo "Моделі не знайдено у $HOLOS_MODELS_DIR" >&2
@@ -55,33 +202,21 @@ fi
 
 mkdir -p "$HOLOS_SPEAKERS_DIR" "$DATA_DIR"
 
-BROWSER_HOST="$HOLOS_HOST"
-if [ "$BROWSER_HOST" = "0.0.0.0" ]; then
-    BROWSER_HOST="127.0.0.1"
+if (exec 3<>"/dev/tcp/$BROWSER_HOST/$HOLOS_PORT") 2>/dev/null; then
+    echo "Порт $HOLOS_PORT зайнятий — HolosTTS, ймовірно, вже запущено." >&2
+    echo "Зупиніть: $SELF --stop" >&2
+    exit 1
 fi
-URL="http://$BROWSER_HOST:$HOLOS_PORT/"
-
-cd "$DATA_DIR"
 
 if [ "${HOLOS_OPEN_BROWSER:-1}" != "0" ] &&
    { [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; }; then
-    (
-        i=0
-        while [ "$i" -lt 180 ]; do
-            if command -v curl >/dev/null 2>&1; then
-                curl -sf --max-time 2 "$URL/healthz" >/dev/null 2>&1 && break
-            elif (exec 3<>"/dev/tcp/$BROWSER_HOST/$HOLOS_PORT") 2>/dev/null; then
-                break
-            fi
-            sleep 1
-            i=$((i + 1))
-        done
-        if command -v xdg-open >/dev/null 2>&1; then
-            xdg-open "$URL" >/dev/null 2>&1 || true
-        fi
-    ) &
+    open_browser_later
 fi
 
+echo "$$" > "$PIDFILE"
+
+cd "$DATA_DIR"
+
 echo "HolosTTS: $URL"
-echo "Дані та логи: $DATA_DIR  (Ctrl+C — зупинити)"
+echo "Дані та логи: $DATA_DIR  (Ctrl+C — зупинити, або $SELF --stop)"
 exec "$APPDIR/usr/bin/holos-server"
