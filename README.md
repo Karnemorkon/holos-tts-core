@@ -1,210 +1,220 @@
 # holos-tts-core
 
+[![Stand With Ukraine](https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/banner-direct-single.svg)](https://stand-with-ukraine.pp.ua)
+[![Made in Ukraine](https://img.shields.io/badge/made_in-Ukraine-ffd700.svg?labelColor=0057b7)](https://stand-with-ukraine.pp.ua)
 [![CI](https://github.com/Karnemorkon/holos-tts-core/actions/workflows/ci.yml/badge.svg)](https://github.com/Karnemorkon/holos-tts-core/actions/workflows/ci.yml)
+[![Docker](https://github.com/Karnemorkon/holos-tts-core/actions/workflows/docker.yml/badge.svg)](https://github.com/Karnemorkon/holos-tts-core/actions/workflows/docker.yml)
+[![Docker Hub](https://img.shields.io/badge/docker-morkon06%2Fholostts--core-blue)](https://hub.docker.com/r/morkon06/holostts-core)
 
-C++ native core для **HolosTTS** (український text-to-speech). Етап 3 ТЗ:
-заміна Python-сервісу легшим C++ ядром з API-паритетом.
+---
 
-> **Статус: ядро готове до роботи (M6).** Повний пайплайн: препроцес →
-> нейро-вербалізація (M2M100 ONNX int8) → стрес (словник marisa-trie +
-> нейро-фолбек accentor) → ipa_uk фонемізація → токенізація → ORT-генерація →
-> PCM/WAV. Drogon HTTP/WS сервер на `:8004` з API-паритетом hybrid та
-> OpenAI `/v1/audio/speech`. Тривалість аудіо збігається з
-> `HolosTTS-hybrid` до **≤0.02 с**; neural-вербалізація — **дослівний паритет**.
+> ⚠️ **Відмова від відповідальності / Disclaimer**
+>
+> * **UA:** Цей проєкт є незалежною аматорською розробкою (нативною C++ обгорткою) і **не є офіційним продуктом** автора оригінальної нейромережі. Він жодним чином не афілійований, не спонсорується і не підтримується розробником [patriotyk](https://github.com/patriotyk). Усі права на оригінальні моделі, ваги та препроцес належать їхньому законному автору. Проєкт надається «як є» (as is), автор цієї обгортки не несе відповідальності за можливі збої чи використання сервісу.
+> * **EN:** This project is an independent, community-driven native C++ wrapper and **is not an official product** of the original neural network creator. It is not affiliated with, endorsed, or sponsored by [patriotyk](https://github.com/patriotyk). All rights to the original models and weights belong to their respective owner. The software is provided «as is», without warranty of any kind.
 
-## Цілі (ТЗ Етап 3)
+> **English summary:** production-ready Dockerized **Ukrainian text-to-speech** service
+> (REST API + Web UI, port 8004) written in **C++20** — no Python and no PyTorch at runtime.
+> It runs the [HolosTTS](https://github.com/patriotyk/HolosTTS) neural network with an
+> **INT8 ONNX generator**, a **Gemma-3-270M verbalizer**, dictionary + neural stress and
+> **voice cloning** (ONNX voice encoder) on CPU via ONNX Runtime. Drogon HTTP/WS server with
+> **API parity** to [HolosTTS-hybrid](https://github.com/Karnemorkon/HolosTTS-hybrid)
+> (audio duration within ≤0.02 s, neural verbalization verbatim-equal).
+> Model weights are MIT-licensed by [patriotyk](https://huggingface.co/patriotyk).
 
-- RAM ≤ 400 МБ (проти ~1.5 ГБ у Python) — rule-only конфіг: 468 МБ
-- Cold start < 0.3 с, **Time-To-First-Byte ≤ 200 мс**
-- API-паритет із `Karnemorkon/HolosTTS-hybrid` (Wyoming-проксі без змін)
-- Клонування голосу в UI: voice encoder ONNX int8 (без Python/PyTorch)
-- Автономна збірка без Python (Linux; Windows/ARM — у дорожній карті)
+Нативне C++ ядро українського синтезу мовлення: один бінарник + ONNX Runtime, жодного
+Python у рантаймі. Перший запуск сам довантажує моделі (~0.6 ГБ) у named volume.
 
-## Архітектура пайплайну
+## Можливості
 
-```
-текст → препроцес → вербалізація (Gemma/M2M100 ONNX int8 або rule)
-      → стрес (словник marisa-trie → neural accentor-фолбек для OOV)
-      → фонемізація (ipa_uk) → токенізація → генерація (ONNX/ORT) → PCM/WAV
-
-клон: WAV → 24 кГц resample → voice encoder (ONNX int8) → speakers/<назва>.npy
-      → синтез за іменем голосу (пресети та клони в одному просторі ембеддінгів)
-```
-
-**Стрес — словниковий + neural фолбек.** `stress.trie` (marisa-trie, 2.9М
-ключів) покриває більшість форм за мікросекунди. Слова поза словником
-(або неоднозначні, варіант A: skip) обробляє **accentor-lite** — LSTM
-експортований в ONNX (single-file, ~1.2 МБ), той самий `ukrainian_accentor`,
-що й у Python-конвеєрі. Unicode-регістр слова нормалізується utf8proc
-(паритет з Python `word.lower()/title()`).
-
-**Вербалізація — два режими** (`auto_verbalize`):
-
-| Режим | Реалізація | Латентність | Якість |
-|---|---|---|---|
-| `neural` (типово) | Gemma-3-270M (український verbalizer), ONNX int8, KV-cache | ~1–3 с на речення (CPU) | дослівний паритет з hybrid (4/4 MATCH) |
-| `rule` | C++ регулярки (цифри/дати/час) | мілісекунди | базовий (граматика відмінювання гірша за neural) |
-| `off` / `false` | текст як є | 0 | — |
-
-Legacy bool `auto_verbalize: true` → `neural`, `false` → `off`.
-
-## Моделі
-
-Усі моделі у HF-репозиторії **[Morkon/holos-native-models](https://huggingface.co/Morkon/holos-native-models)**
-(публічні; репозиторій ~1.8 ГБ, але типовий набір для завантаження — ~0.6 ГБ,
-fp32/legacy/CT2-бекапи вантажаться лише за потреби):
-
-| Компонент | Шлях у репо | Застосунок |
-|---|---|---|
-| TTS ONNX int8 + vocab + voices | `tts/` | генерація аудіо |
-| Voice encoder ONNX int8 (80 МБ) | `tts/voice_encoder.onnx` | клонування голосу (24 кГц → 256-dim) |
-| Neural verbalizer (Gemma-3-270M ONNX int8, дефолт) | `verbalizer/gemma-int8/` | цифри→слова (якість) |
-| Neural verbalizer (M2M100 ONNX int8, legacy) | `verbalizer/onnx-int8/` | відкат, `--with-m2m100` |
-| Neural verbalizer (CT2 int8) | `verbalizer/ct2-int8/` | той самий, CTranslate2 |
-| Accentor (ONNX, single-file) | `accentor/` | нейро-фолбек наголосу |
-| Stress trie | `stress/stress.trie` | словниковий наголос |
-
-Завантаження одним скриптом (розкладка під `HOLOS_MODELS_DIR`; лише відсутні
-файли — додавання нової моделі не тягне решту заново):
-
-```bash
-pip install huggingface_hub
-python3 scripts/download_models.py --out models
-# legacy M2M100 (+~0.7 ГБ, для відкату): --with-m2m100
-```
-
-## Клонування голосу
-
-UI: картка **«Клонування голосу з WAV»** — вибрати файл, ввести назву,
-«Зберегти голос». Голос одразу зʼявляється у списку (група «Клоновані») і
-доступний в API за назвою.
-
-| Метод | Шлях | Опис |
-|---|---|---|
-| `GET` | `/api/voices` | `{voices: [...], custom: [...], cloning: true}` |
-| `POST` | `/api/voices` | `{name, audio_base64}` (WAV) → `{status, voice, overwritten, duration_sec}` |
-| `DELETE` | `/api/voices/{name}` | видалити клонований голос (пресети — 400) |
-
-- Формат: WAV PCM16/24/32 або float32, будь-яка частота/канали (береться
-  перший канал; ресемпл у 24 кГц). Ліміти: ≤60 с, ≤16 МБ; енкодер використовує
-  перші ~30 с (як hybrid при `max_sec=30`).
-- Назви: `^[\w \-]{1,40}$` (Unicode), не можна займати імена пресетів;
-  повторне збереження перезаписує клон.
-- Зберігання: `$HOLOS_SPEAKERS_DIR/<name>.npy` — 1-D float32[256], формат
-  numpy `np.save`/`np.load`, сумісний з HolosTTS-hybrid. У Docker — named
-  volume `holos_core_speakers` (моделі лишаються read-only), клони
-  переживають рестарт/перестворення контейнера.
-- `audio_base64` у `/api/synthesize` не підтримується (404): спершу збережіть
-  голос через `POST /api/voices`, далі передавайте його імʼя у `voice`.
-- Якість/ресурси: int8-енкодер проходить golden-гейт cos ≥0.995 vs fp32
-  (фактично 0.99978+); енролмент ~0.8–1.1 с на 5–6 с аудіо (9 потоків),
-  ~8–9 с на 55 с; ORT-сесія створюється ліниво (перший енролмент), пік RSS
-  +~0.85 ГБ під час енкоду, після — звільняється (арена ORT вимкнена),
-  одночасні енролменти серіалізуються.
-- Етика: не клонуйте чужі голоси без згоди.
+- **Синтез українською** 24 кГц: 27 пресетів голосів + **клонування голосу з WAV**
+  (у Web UI клон зберігається під власним імʼям і стає звичайним `voice` для REST/OpenAI API)
+- **Нативний C++20**: Drogon HTTP/WS + ONNX Runtime; без Python, PyTorch і Gradio у рантаймі
+- **INT8 ONNX-генератор** (`holos_cpu_int8.onnx`) — швидше за fp32 на CPU
+- **Автовербалізація**: `neural` (Gemma-3-270M int8, типово) / `rule` (C++ регулярки) / `off`
+- **Наголошування**: словник marisa-trie (2.9М форм) + accentor-lite ONNX для слів поза словником
+- **Потоковий синтез**: REST-стрім (`/v1/audio/speech`) і WebSocket `/api/ws/synthesize` (PCM16-чанки)
+- **API-паритет з HolosTTS-hybrid**: тривалість аудіо Δ ≤0.02 с; та сама схема запитів/відповідей
+- **Docker**: multi-stage образ ~290 МБ, named volumes, healthcheck, ліміти CPU/RAM, ротація логів
+- **Тести**: 81 unit/golden-тест; golden-гейти verbalizer 46/46 і voice encoder cos 0.99998
 
 ## Швидкий старт
 
-Кроки від нуля до працюючого сервера (потрібен Docker; ~0.6 ГБ на моделі).
-
-**1. Запустити** — один із варіантів:
-
 ```bash
-# варіант A: з джерела — моделі завантажуються АВТОМАТИЧНО
+git clone https://github.com/Karnemorkon/holos-tts-core.git
+cd holos-tts-core
 docker compose up -d --build
-
-# варіант B: образ з Docker Hub — моделі завантажити вручну
-pip install huggingface_hub && python3 scripts/download_models.py --out models
-docker run -d -p 8004:8004 -v $PWD/models:/app/models:ro \
-    --name holos-core morkon06/holostts-core:latest
+# перший запуск: довантаження моделей (~0.6 ГБ) у volume, потім:
+curl http://localhost:8004/healthz
+# Web UI: http://localhost:8004/
+# логи першого запуску: docker compose logs -f holos-core
 ```
 
-Перший `docker compose up -d` сам завантажує моделі (~0.6 ГБ, публічний HF,
-без токена) у named volume `holos_core_models` і запускає сервер одразу після
-завершення; подальші старти — миттєві (skipped, якщо моделі вже на місці).
-Примусове перезавантаження:
+Ознака готовності:
+`{"status":"ok","engine":"holos-tts-core-native","verbalizer":"neural+rule","cloning":true,...}`.
+
+Потрібен Docker + Compose і ≥2 ГБ RAM (neural-дефолт тримає ~1.1 ГБ RSS; rule-only — ~468 МБ).
+Сервіс `downloader` у compose завантажує лише відсутні файли, тож оновлення образу не тягне
+моделі заново. Примусове перезавантаження:
 
 ```bash
 docker compose run --rm downloader \
     python3 scripts/download_models.py --out models --force
 ```
 
-**2. Перевірити:**
+Перший синтез (WAV `out.wav`):
 
 ```bash
-curl localhost:8004/healthz
-# -> {"engine":"holos-tts-core-native","status":"ok","verbalizer":"neural+rule",...}
-
-# Web-UI: http://localhost:8004/ (синтез + клонування голосу з WAV)
+curl -s -X POST http://localhost:8004/api/synthesize \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"Привіт, світе! Це тест синтезу мовлення українською.","voice":"Speaker_43"}' \
+  | python3 -c 'import sys,json,base64; open("out.wav","wb").write(base64.b64decode(json.load(sys.stdin)["audio_base64"]))'
 ```
 
-**3. Перший синтез** (WAV-файл `out.wav`):
+## Розгортання через Docker Hub
+
+Образ: [`morkon06/holostts-core`](https://hub.docker.com/r/morkon06/holostts-core)
+(оновлюється автоматично з `main` через GitHub Actions; теги `latest`, `sha-*`, версійні `v*`).
 
 ```bash
-curl -s -X POST localhost:8004/api/synthesize \
-    -H "Content-Type: application/json" \
-    -d '{"text":"Привіт, світе! Це тест синтезу мовлення українською.","voice":"Speaker_43"}' \
-    | python3 -c "import sys,json,base64; open('out.wav','wb').write(base64.b64decode(json.load(sys.stdin)['audio_base64']))"
+docker pull morkon06/holostts-core:latest
 ```
 
-**Нотатки:**
+Образ **не містить моделей** — їх треба змонтувати. Найпростіше — compose з репозиторію,
+замінивши збірку на готовий образ (downloader лишається):
 
-- Нейро-дефолт тримає ~1.1 ГБ RSS у простої (+~60 МБ під час генерації) —
-  давайте контейнеру ліміт ≥2 ГБ. Rule-only (без neural-вербалізатора):
-  `-e HOLOS_VERBALIZER_DIR=""` → ~468 МБ.
-- Голос за замовчуванням core-API: `Speaker_0` (hybrid використовує
-  `Speaker_84`); повний список — `GET /api/voices`.
-- Запуск нативного бінарника (без Docker) — див. розділ «Запуск сервера» нижче.
+```yaml
+services:
+  holos-core:
+    image: morkon06/holostts-core:latest
+    # build: … — прибрати або закоментувати
+    container_name: holos-core
+    ports:
+      - "8004:8004"
+    environment:
+      - HOLOS_MODELS_DIR=/app/models
+      - HOLOS_VERBALIZER_DIR=/app/models/verbalizer/gemma-int8
+      - HOLOS_PORT=8004
+      - HOLOS_SPEAKERS_DIR=/app/speakers
+    volumes:
+      - holos_core_models:/app/models:ro
+      - holos_core_speakers:/app/speakers
+    depends_on:
+      downloader:
+        condition: service_completed_successfully
+    restart: unless-stopped
+```
 
-## Залежності
+Моделі також можна підготувати заздалегідь (`pip install huggingface_hub &&
+python3 scripts/download_models.py --out models`) і змонтувати каталог
+`-v $PWD/models:/app/models:ro` замість named volume.
 
-| Залежність | Призначення | Спосіб |
+Теги: `latest` — поточна `main` (linux/amd64); `sha-<короткий>` — конкретний коміт;
+`vX.Y.Z` — пін релізу. ARM64-образ — у дорожній карті (див. нижче).
+
+## Клонування голосу
+
+UI: картка **«Клонування голосу з WAV»** — вибрати файл, ввести назву, «Зберегти голос».
+Голос одразу зʼявляється у списку (група «Клоновані», кнопка видалення) і доступний в API.
+
+| Метод | Шлях | Опис |
 |---|---|---|
-| ONNX Runtime 1.31 | генерація аудіо + neural verbalizer + accentor | prebuilt tarball |
-| sentencepiece | токенізатор M2M100/Gemma | apt (`libsentencepiece-dev`) |
-| marisa-trie | словник наголосів | FetchContent |
-| utf8proc, pcre2, nlohmann_json, dr_wav | Unicode/regex/JSON/WAV | FetchContent |
-| Drogon | HTTP/WS сервер | FetchContent |
-| CTranslate2 | (опційно) CT2-вербалізація | FetchContent |
+| `GET` | `/api/voices` | `{voices: [...], custom: [...], cloning: true}` |
+| `POST` | `/api/voices` | `{name, audio_base64}` (WAV) → `{status, voice, overwritten, sample_rate, duration_sec}` |
+| `DELETE` | `/api/voices/{name}` | видалити клонований голос (пресет → 400, невідомий → 404) |
 
-## Збірка
+- Формат: WAV PCM16/24/32 або float32, будь-яка частота/канали (береться перший канал;
+  ресемпл у 24 кГц). Ліміти: ≤60 с, ≤16 МБ; енкодер використовує перші ~30 с
+  (як hybrid при `max_sec=30`).
+- Назви: `^[\w \-]{1,40}$` (Unicode), не можна займати імена пресетів; повторне
+  збереження перезаписує клон.
+- Зберігання: `$HOLOS_SPEAKERS_DIR/<name>.npy` — 1-D float32[256], формат numpy
+  `np.save`/`np.load`, сумісний з HolosTTS-hybrid. У Docker — writable volume
+  `holos_core_speakers`; моделі лишаються read-only, клони переживають
+  рестарт/перестворення контейнера.
+- `audio_base64` у `/api/synthesize` не підтримується (404): спершу збережіть голос
+  через `POST /api/voices`, далі передавайте його імʼя у `voice`.
+- Якість/ресурси: int8-енкодер проходить golden-гейт cos ≥0.995 vs fp32
+  (фактично 0.99978+); енролмент ~0.8–1.1 с на 5–6 с аудіо (9 потоків), ~8–9 с на 55 с;
+  ORT-сесія створюється ліниво (перший енролмент), пік RSS +~0.85 ГБ під час енкоду,
+  після — звільняється (арена ORT вимкнена), одночасні енролменти серіалізуються.
+- Етика: не клонуйте чужі голоси без згоди.
+
+## API
+
+### `POST /api/synthesize`
+
+| Поле | Тип | Опис |
+|---|---|---|
+| `text` | str (обовʼязкове) | Текст, 10…50000 символів |
+| `voice` | str | Пресет або клонований голос (типово — перший) |
+| `speed` | float | Швидкість 0.25–4.0 (типово 1.0) |
+| `auto_verbalize` | str/bool | `neural` (типово), `rule`, `off`; legacy `true`/`false` |
+| `raw_stress` | bool | `true` → без автонаголосу, власні `+`/U+0301 |
+| `format` | str | Лише `wav` (типово); інші формати — 400 |
+
+Відповідь: `{format, sample_rate, duration_sec, voice, text, verbalized_text, audio_base64}`.
+
+### `POST /api/verbalize`
 
 ```bash
-# повна збірка (ORT + сервер + neural verbalizer)
-cmake -S . -B build -G Ninja \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DHOLOS_WITH_ORT=ON \
-    -DHOLOS_WITH_SERVER=ON \
-    -DHOLOS_WITH_VERBALIZER=ON \
-    -DHOLOS_ORT_ROOT=/opt/ort-1.31.0
-cmake --build build --parallel
-
-# golden-тести neural verbalizer (neural 30/30, gemma 46/46 vs Python ONNX)
-cmake -S . -B build \
-    -DHOLOS_TEST_VERBALIZER_DIR=/path/to/verbalizer/onnx-int8 \
-    -DHOLOS_TEST_VERBALIZER_GEMMA_DIR=/path/to/verbalizer/gemma-int8
-ctest --test-dir build -R "verbalizer_neural|gemma_prep|verbalizer_gemma"
-
-# golden-тест voice encoder (клонування; cos ≥0.995 vs Python ORT)
-cmake -S . -B build -DHOLOS_TEST_VOICE_ENCODER=/path/to/voice_encoder.onnx
-ctest --test-dir build -R "voice_encoder|audio_io|custom_voices"
+curl -s http://localhost:8004/api/verbalize \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"22.08.2025 о 15:30, 250 грн"}'
+# {"text":"двадцять другого серпня дві тисячі двадцять пʼятого року о пʼятнадцятій тридцять, ціна двісті пʼятдесят гривень..."}
 ```
 
-Золоті тести пропускаються (exit 77), якщо відповідний `_DIR`/шлях не задано.
-Повний ctest — 81 тест (єдина відома невдача — upstream Drogon `CookieSameSite`,
-не повʼязана з проєктом).
-CI (ubuntu-24.04) збирає конфіг `ORT=ON, SERVER=OFF` і проганяє golden-тести
-без моделей.
+`mode`: `neural` (типово) або `rule`.
 
-## Запуск сервера
+### `GET /api/voices`, `GET /healthz`
 
 ```bash
-export HOLOS_MODELS_DIR=$PWD/models
-export HOLOS_VERBALIZER_DIR=$PWD/models/verbalizer/gemma-int8   # або "" для rule-only
-./build/server/holos-server   # :8004
+curl -s http://localhost:8004/api/voices   # {"voices":[...],"custom":[...],"cloning":true}
+curl -s http://localhost:8004/healthz      # статус, провайдер, потоки, verbalizer, cloning
 ```
 
-| Env | Дефолт | Призначення |
+### `POST /v1/audio/speech` (OpenAI-сумісний)
+
+Формат [OpenAI Audio Speech API](https://platform.openai.com/docs/api-reference/audio/createSpeech) —
+працює з клієнтами, що вміють підмінювати `base_url` (SillyTavern, OpenWebUI, LibreChat тощо).
+
+| Поле | Опис |
+|---|---|
+| `input` | текст (автовербалізація цифр) |
+| `voice` | пресет/клон (`Speaker_84`) або імена OpenAI (`alloy`, `nova`, …) |
+| `response_format` | `wav` (типово), `pcm`; `mp3` — кодек не підключено (400) |
+| `speed` | 0.25–4.0 (типово 1.0) |
+| `stream` | `true` → потокова відповідь |
+
+Автентифікація не потрібна; поле `model` приймається й ігнорується.
+
+### `WS /api/ws/synthesize` (потоковий)
+
+Перший кадр — JSON-конфіг, далі бінарні PCM16-чанки (24 кГц, mono), фінальний
+текстовий кадр — `{"done": true, "sample_rate": 24000, "duration_sec": ...}`.
+
+```python
+import asyncio, json, websockets
+
+async def main():
+    async with websockets.connect('ws://localhost:8004/api/ws/synthesize') as ws:
+        await ws.send(json.dumps({'text': 'Привіт! Це потоковий синтез мови.', 'voice': 'Speaker_84'}))
+        with open('stream.pcm', 'wb') as f:
+            async for msg in ws:
+                if isinstance(msg, bytes):
+                    f.write(msg)
+                else:
+                    print(json.loads(msg))
+
+asyncio.run(main())
+```
+
+Конфіг: `text` (обовʼязково), `voice`, `speed`, `auto_verbalize`, `raw_stress`.
+Помилка сервера → текстовий кадр `{"error": "..."}`.
+
+## Конфігурація
+
+| Змінна | Типово | Що робить |
 |---|---|---|
 | `HOLOS_MODELS_DIR` | `/app/models` | база моделей |
 | `HOLOS_TRIE` | `$MODELS/stress.trie` | словник наголосів |
@@ -216,43 +226,75 @@ export HOLOS_VERBALIZER_DIR=$PWD/models/verbalizer/gemma-int8   # або "" дл
 | `HOLOS_SPEAKERS_DIR` | `/app/speakers` | каталог клонованих голосів (`*.npy`) |
 | `HOLOS_VERBALIZER_DIR` | `""` (rule-only) | neural verbalizer; порожній = rule |
 | `HOLOS_PORT` | `8004` | HTTP-порт |
-| `HOLOS_THREADS` | автo | потоки ONNX Runtime (0 = авто) |
-| `HOLOS_METRICS` | `0` | `1` = `[metrics]` логи + `timings` у відповідях (для бенчів; у проді лишати 0) |
+| `HOLOS_THREADS` | авто | потоки ONNX Runtime (0 = авто) |
+| `HOLOS_METRICS` | `0` | `1` = `[metrics]` логи + `timings` у відповідях (для бенчів) |
 
-### API (паритет HolosTTS-hybrid)
+### Варіанти збірки (теги образу)
 
-- `GET /healthz` — статус; містить `verbalizer: "neural+rule"|"rule"`, `cloning: bool`
-- `GET /api/voices` — `{voices: [...], custom: [...], cloning: bool}`
-- `POST /api/voices` — зберегти клон: `{name, audio_base64}` (WAV, див. «Клонування голосу»)
-- `DELETE /api/voices/{name}` — видалити клон (пресет → 400, невідомий → 404)
-- `POST /api/synthesize` — `{text, voice?, speed?, raw_stress?, auto_verbalize?, format?}`;
-  відповідь містить `text` (оригінал), `verbalized_text`, `audio_base64` (WAV);
-  `voice` — пресет або клонований голос (`audio_base64` тут → 404)
-- `POST /api/verbalize` — `{text, mode?: "neural"|"rule"}`; вербалізація без синтезу
-- `POST /v1/audio/speech` — OpenAI-сумісний ендпоінт (streaming підтримується)
-- `WS /api/ws/synthesize` — чанковий стрім PCM16
-- `GET /` — UI (автовербалізація neural/rule/off, клонування голосу з WAV, список голосів)
+| Тег | Архітектури | Для чого |
+|---|---|---|
+| `latest` (**дефолт**) | linux/amd64 | будь-які x86-64 CPU (перевірено на Xeon E5-2650, AVX без AVX2) |
+| `sha-<короткий>` | linux/amd64 | пін конкретного коміту |
+| `vX.Y.Z` | linux/amd64 | пін релізу |
 
-`auto_verbalize`: `"neural"` (типово) | `"rule"` | `"off" | false | true` (legacy).
+ARM64 (Raspberry Pi 4/5, ARM-сервери, Apple Silicon) — у дорожній карті: Dockerfile уже
+містить гілку `TARGETARCH=arm64` (ORT aarch64), потрібні нативні runners + маніфест.
 
-### Паритет з hybrid (виміряно, voice=Speaker_43)
+Ліміти контейнера (`cpus: "12.0"`, `memory: 3g`) задані у `docker-compose.yml` — правте
+під свій хост. Для rule-only конфігу задайте `HOLOS_VERBALIZER_DIR=""` у environment
+(економія ~0.6 ГБ RSS).
 
-| Текст | hybrid | core | Δ |
+## Моделі
+
+Усі моделі — у HF-репозиторії **[Morkon/holos-native-models](https://huggingface.co/Morkon/holos-native-models)**
+(публічні; репозиторій ~1.8 ГБ, але типовий набір — ~0.6 ГБ; fp32/legacy/CT2-бекапи
+вантажаться лише за потреби):
+
+| Компонент | Шлях у репо | Застосунок |
+|---|---|---|
+| TTS ONNX int8 + vocab + voices | `tts/` | генерація аудіо |
+| Voice encoder ONNX int8 (80 МБ) | `tts/voice_encoder.onnx` | клонування голосу (24 кГц → 256-dim) |
+| Neural verbalizer Gemma-3-270M int8 (дефолт) | `verbalizer/gemma-int8/` | цифри→слова (якість) |
+| Neural verbalizer M2M100 int8 (legacy) | `verbalizer/onnx-int8/` | відкат, `--with-m2m100` |
+| Neural verbalizer CT2 int8 (legacy) | `verbalizer/ct2-int8/` | той самий, CTranslate2 |
+| Accentor (ONNX, single-file) | `accentor/` | нейро-фолбек наголосу |
+| Stress trie | `stress/stress.trie` | словниковий наголос |
+
+```bash
+pip install huggingface_hub
+python3 scripts/download_models.py --out models
+# legacy M2M100 (+~0.7 ГБ, для відкату): --with-m2m100
+```
+
+## Архітектура
+
+```text
+текст → препроцес → вербалізація (Gemma-3-270M ONNX int8 або rule)
+      → стрес (словник marisa-trie → accentor-фолбек для OOV)
+      → фонемізація (ipa_uk) → токенізація → генерація (ONNX/ORT) → PCM/WAV
+
+клон: WAV → 24 кГц resample → voice encoder (ONNX int8) → speakers/<назва>.npy
+      → синтез за іменем голосу (пресети та клони в одному просторі ембеддінгів)
+```
+
+**Стрес — словниковий + neural фолбек.** `stress.trie` (marisa-trie, 2.9М ключів)
+покриває більшість форм за мікросекунди. Слова поза словником обробляє
+**accentor-lite** — LSTM, експортований в ONNX (single-file, ~1.2 МБ), той самий
+`ukrainian_accentor`, що й у Python-конвеєрі. Unicode-регістр нормалізується utf8proc
+(паритет з Python `word.lower()/title()`).
+
+**Вербалізація — два режими** (`auto_verbalize`):
+
+| Режим | Реалізація | Латентність | Якість |
 |---|---|---|---|
-| «Привіт, світе! Це тест синтезу мовлення українською.» | 3.60 с | 3.62 с | +0.02 |
-| «Купив 25 машин 12 березня 2025 року о 14:30…» | 8.07 с | 8.07 с | 0.00 |
-| «Загальна вартість становить 12 450 гривень…» | 7.55 с | 7.55 с | 0.00 |
-| «Науково-дослідний інститут працює над проєктом уже три роки.» | 4.22 с | 4.22 с | 0.00 |
+| `neural` (типово) | Gemma-3-270M (український verbalizer), ONNX int8, KV-cache | ~1–3 с на речення (CPU) | дослівний паритет з hybrid (4/4 MATCH) |
+| `rule` | C++ регулярки (цифри/дати/час) | мілісекунди | базовий (граматика відмінювання гірша) |
+| `off` / `false` | текст як є | 0 | — |
 
-Neural-вербалізація: 4/4 дослівних збігів з hybrid. Відомі відмінності:
-`/api/voices` віддає пресети у порядку `voices.json` + `custom`/`cloning`
-(розширення core; hybrid має лише `voices`+`custom` у порядку `voices.pt`);
-rule-вербалізатор гірше відмінює («дванадцять березня» замість «дванадцятого»).
+## Бенчмарки (Xeon 16 ядер, `HOLOS_THREADS=9`, теплий старт, медіана з 3)
 
-### Бенчмарк (Xeon 16 ядер, `HOLOS_THREADS=9`, теплий старт, медіана з 3)
-
-Cold start (процес → `healthz` 200): **~10 с** — engine (trie + TTS ONNX +
-accentor) ~8.0 с, neural verbalizer (Gemma-3-270M) ~2.4 с; rule-only ≈ 8 с.
+Cold start (процес → `healthz` 200): **~10 с** — engine (trie + TTS ONNX + accentor)
+~8.0 с, neural verbalizer (Gemma-3-270M) ~2.4 с; rule-only ≈ 8 с.
 
 | Текст | Режим | Частин | TTFB, мс (stream / WS) | total, мс | Аудіо, с | RTF | vb, мс | ort, мс |
 |---|---|---|---|---|---|---|---|---|
@@ -266,41 +308,71 @@ accentor) ~8.0 с, neural verbalizer (Gemma-3-270M) ~2.4 с; rule-only ≈ 8 с.
 
 - `TTFB` — `/v1/audio/speech` (stream) та `WS /api/ws/synthesize`; `total` — `/api/synthesize`.
 - Neural-вербалізація працює лише на текстах із цифрами (гейт `has_digits`); без цифр neural ≡ rule.
-- TTFB = час до першого чанка ≈ синтез першої частини (~100 символів) — тому для довгих
-  текстів це секунди. RTF власне ORT ≈ 0.34–0.43; цифрові тексти в neural додають vb ~2.6–2.9 с.
-- Цілі ТЗ (TTFB ≤ 200 мс, RTF < 0.25) на CPU не досягнуті — потрібні дрібніший стрімінг
-  і оптимізації ORT (окремий етап).
-- RSS: neural **1.07 ГБ**, rule-only (`HOLOS_VERBALIZER_DIR=""`) **468 МБ** — Gemma-3-270M
-  int8 (226 МБ на диску) свідомо обмінюється на якість; M2M100-418M більше не дефолт.
+- RSS: neural **1.07 ГБ**, rule-only (`HOLOS_VERBALIZER_DIR=""`) **468 МБ**; клонування
+  додає пік +~0.85 ГБ під час енролменту (звільняється після).
 - Вербалізатор: Gemma-3-270M-uk (ONNX int8, MatMul-only QInt8) замість M2M100-418M —
-  диск **764 МБ → 226 МБ**, RSS **1.65 → 1.07 ГБ**, cold start vb **~4.6 → ~2.4 с**,
-  vb **4.9/11.6 → 2.6/2.9 с** (цифри/довгий), golden 46/46 vs Python-референс
-  (`tests/gemma_verbalizer_golden.tsv`). Кращий на кодах/IBAN/телефонах/рахунках і
-  узгодженні числівників; поодинокі model-level помилки лишаються («1 год 30 хв»
-  відмінки, «12 3456 789» величина, заміна валюти в «500 рублів»). M2M100 лишається
-  в HF-репо для відкату (`scripts/download_models.py --with-m2m100`).
+  диск **764 → 226 МБ**, RSS **1.65 → 1.07 ГБ**, cold start vb **~4.6 → ~2.4 с**,
+  golden 46/46 vs Python-референс. M2M100 лишається в HF-репо для відкату.
+- Цілі ТЗ (TTFB ≤ 200 мс, RTF < 0.25) на CPU не досягнуті — потрібні дрібніший
+  стрімінг і оптимізації ORT (окремий етап).
 
 Відтворення: `HOLOS_METRICS=1 ./build/server/holos-server` +
 `python3 scripts/bench_latency.py --url http://127.0.0.1:8004 --runs 3`
 (markdown-таблиця + JSON; `--cold-container` для заміру cold start у Docker).
 
-### Docker
+### Паритет з hybrid (виміряно, voice=Speaker_43)
 
-Опублікований образ: **[`morkon06/holostts-core`](https://hub.docker.com/r/morkon06/holostts-core)**
-(companion: `morkon06/holostts-hybrid`).
+| Текст | hybrid | core | Δ |
+|---|---|---|---|
+| «Привіт, світе! Це тест синтезу мовлення українською.» | 3.60 с | 3.62 с | +0.02 |
+| «Купив 25 машин 12 березня 2025 року о 14:30…» | 8.07 с | 8.07 с | 0.00 |
+| «Загальна вартість становить 12 450 гривень…» | 7.55 с | 7.55 с | 0.00 |
+| «Науково-дослідний інститут працює над проєктом уже три роки.» | 4.22 с | 4.22 с | 0.00 |
+
+Відомі відмінності: `/api/voices` віддає пресети у порядку `voices.json` + `custom`/`cloning`
+(розширення core; hybrid має лише `voices`+`custom`); rule-вербалізатор гірше відмінює
+(«дванадцять березня» замість «дванадцятого»).
+
+## Збірка з джерела
+
+Залежності: ONNX Runtime 1.31 (prebuilt tarball), sentencepiece (apt), Drogon,
+marisa-trie, utf8proc, pcre2, nlohmann_json, dr_wav (FetchContent).
 
 ```bash
-# з локального джерела: моделі автовантаження у named volume holos_core_models
-docker compose up -d --build
-
-# з Docker Hub: див. «Швидкий старт», варіант B (моделі вручну у ./models)
+cmake -S . -B build -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DHOLOS_WITH_ORT=ON \
+    -DHOLOS_WITH_SERVER=ON \
+    -DHOLOS_WITH_VERBALIZER=ON \
+    -DHOLOS_ORT_ROOT=/opt/ort-1.31.0
+cmake --build build --parallel
 ```
 
-Моделі живуть у named volume `holos_core_models` (`/app/models`, read-only);
-сервіс `downloader` у compose завантажує їх перед стартом сервера (ідемпотентно,
-лише відсутні файли). Клоновані голоси — у writable volume
-`holos_core_speakers` (`/app/speakers`), тому переживають оновлення образу.
-Багато-архітектурна збірка (amd64+arm64) — у дорожній карті.
+Golden-тести (пропускаються, якщо шлях не задано):
+
+```bash
+# neural verbalizer (neural 30/30, gemma 46/46 vs Python ONNX)
+cmake -S . -B build \
+    -DHOLOS_TEST_VERBALIZER_DIR=/path/to/verbalizer/onnx-int8 \
+    -DHOLOS_TEST_VERBALIZER_GEMMA_DIR=/path/to/verbalizer/gemma-int8
+ctest --test-dir build -R "verbalizer_neural|gemma_prep|verbalizer_gemma"
+
+# voice encoder (клонування; cos ≥0.995 vs Python ORT)
+cmake -S . -B build -DHOLOS_TEST_VOICE_ENCODER=/path/to/voice_encoder.onnx
+ctest --test-dir build -R "voice_encoder|audio_io|custom_voices"
+```
+
+Повний ctest — 81 тест (єдина відома невдача — upstream Drogon `CookieSameSite`,
+не повʼязана з проєктом). CI збирає конфіг `ORT=ON, SERVER=OFF`, проганяє тести без
+моделей, а окремий workflow збирає й публікує Docker-образ.
+
+Запуск нативного бінарника:
+
+```bash
+export HOLOS_MODELS_DIR=$PWD/models
+export HOLOS_VERBALIZER_DIR=$PWD/models/verbalizer/gemma-int8   # або "" для rule-only
+./build/server/holos-server   # :8004
+```
 
 ## Структура
 
@@ -309,7 +381,7 @@ src/core/      бібліотека ядра (текст, вербалізаці
 src/cli/       holos-cli
 server/        Drogon HTTP/WS (:8004)
 scripts/       download_models.py (HF → models/)
-tools/         допоміжні скрипти (конвертація int8, паритет PCM)
+tools/         допоміжні скрипти (конвертація int8, паритет PCM, експорт енкодера)
 tests/         unit + golden-тести
 cmake/         FetchContent-залежності
 docker/        multi-stage Dockerfile
@@ -323,34 +395,46 @@ docker/        multi-stage Dockerfile
 - **M3** ✅ Docker: multi-stage образ, compose, HF download script, Docker Hub
 - **M4** ✅ neural verbalizer: M2M100 ONNX int8 (KV-cache, greedy), golden 30/30
 - **M5** ✅ API-інтеграція: `auto_verbalize: neural|rule|off`, default neural
-- **M6** ✅ паритет стресу: accentor single-file ONNX (відновлено втрачений
-  external-data експорт), Unicode lower/title, UTF-8-safe вставка U+0301;
-  тривалість аудіо Δ ≤ 0.02 с vs hybrid
-- **M7** ✅ Gemma-3-270M verbalizer: новий backend (`verbalizer/gemma-int8`,
-  авто-детект `model.onnx`), PCRE2-порт digit_router/bignum_spacing, спліт
-  речень з абревіатурами, golden 46/46; диск −538 МБ, RSS −0.58 ГБ, vb ×2–4
+- **M6** ✅ паритет стресу: accentor single-file ONNX, Unicode lower/title,
+  UTF-8-safe вставка U+0301; тривалість аудіо Δ ≤0.02 с vs hybrid
+- **M7** ✅ Gemma-3-270M verbalizer: новий backend (`verbalizer/gemma-int8`),
+  авто-детект `model.onnx`, PCRE2-порт digit_router/bignum_spacing, golden 46/46;
+  диск −538 МБ, RSS −0.58 ГБ
 - **M8** ✅ клонування голосу: voice encoder ONNX int8 (80 МБ, 24 кГц → 256),
   mask-free StyleEncoder export, `POST/DELETE /api/voices`, UI-панель,
-  `speakers/*.npy` (numpy/hybrid-сумісні), golden cos 0.99998, peak RSS
-  звільняється після енролменту
+  `speakers/*.npy` (numpy/hybrid-сумісні), golden cos 0.99998
 
 Надалі:
 
 - **ARM64**: Raspberry Pi 4/5, ARM-сервери, Apple Silicon, Windows ARM64
-  (збірка ORT/Drogon під aarch64, NEON-квантування, окремі образи).
-- **Портативний застосунок без Docker**: Linux x64 (AppImage/static) і
-  Windows x64 (zip + `holos-server.exe`), моделі — поруч із бінарником,
-  UI — у браузері.
-- **GPU**: CUDA/TensorRT/Vulkan-провайдери ORT — відкладено (CPU-цілі
-  пріоритетні; на GPU очікується RTF < 0.05).
+  (нативні arm64 runners + маніфест `latest`; Dockerfile уже має гілку `TARGETARCH=arm64`).
+- **Портативний застосунок без Docker**: Linux x64 (AppImage/static) і Windows x64
+  (zip + `holos-server.exe`), моделі — поруч із бінарником, UI — у браузері.
+- **GPU**: CUDA/TensorRT/Vulkan-провайдери ORT — відкладено (CPU-цілі пріоритетні;
+  на GPU очікується RTF < 0.05).
 - Граматика rule-вербалізатора, порядок `/api/voices`, CT2-вербалізація,
-  fine-tune Gemma на проблемних кейсах (відмінки числівників, складні групи
-  цифр, валюти).
+  fine-tune Gemma на проблемних кейсах (відмінки числівників, складні групи цифр, валюти).
 
-## Ліцензія
+## Ліцензія та подяки
 
-MIT. Моделі та `stress.trie` належать їх авторам (див. `patriotyk/*`,
-`ukrainian-word-stress`, `ukrainian_accentor`, M2M100 Helsinki-NLP).
-`verbalizer/gemma-int8` — квантована похідна Gemma 3 270M
-(© Google, [Gemma Terms of Use](https://ai.google.dev/gemma/terms)) та
-[skypro1111/gemma-3-270m-uk-verbalizer](https://huggingface.co/skypro1111/gemma-3-270m-uk-verbalizer).
+- **Цей репозиторій** (ядро, сервер, UI, оптимізації): [MIT](LICENSE).
+- **Нейромережа HolosTTS** (ваги `holos_cpu_int8.onnx`, `voices.json`) належить автору
+  **[patriotyk](https://github.com/patriotyk)** і розповсюджується за MIT:
+  [github.com/patriotyk/HolosTTS](https://github.com/patriotyk/HolosTTS) ·
+  [huggingface.co/patriotyk/HolosTTS](https://huggingface.co/patriotyk/HolosTTS).
+  Велика подяка за модель та препроцес-пайплайн! Сервіс завантажує дзеркало ваг з
+  [Morkon/holos-native-models](https://huggingface.co/Morkon/holos-native-models).
+- **Voice encoder** (клонування) — експорт StyleEncoder з HolosTTS у ONNX int8;
+  golden-гейт cos 0.99998 vs Python-референс.
+- **Вербалізація**: `verbalizer/gemma-int8` — квантована похідна Gemma 3 270M
+  (© Google, [Gemma Terms of Use](https://ai.google.dev/gemma/terms)) та
+  [skypro1111/gemma-3-270m-uk-verbalizer](https://huggingface.co/skypro1111/gemma-3-270m-uk-verbalizer);
+  legacy M2M100 — [Helsinki-NLP](https://huggingface.co/Helsinki-NLP) /
+  [skypro1111](https://huggingface.co/skypro1111).
+- **Наголос**: [ukrainian-word-stress](https://github.com/patriotyk/ukrainian-word-stress)
+  (MIT, lang-uk) · [ipa-uk](https://github.com/patriotyk/ipa-uk) (MIT, lang-uk) ·
+  [ukrainian-accentor](https://github.com/egorsmkv/ukrainian-accentor).
+- **Залежності**: ONNX Runtime, Drogon, marisa-trie, utf8proc, PCRE2, nlohmann_json,
+  dr_wav — див. `cmake/` і `docker/Dockerfile`.
+
+Проєкт не афілійований з автором моделі; права на нейромережу належать її автору.
