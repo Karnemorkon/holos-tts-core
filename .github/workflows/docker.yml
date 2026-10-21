@@ -2,10 +2,8 @@ name: Docker
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
   pull_request:
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -39,7 +37,7 @@ jobs:
   # amd64+arm64 нативно (без QEMU), кожен — push-by-digest.
   build:
     name: build (${{ matrix.platform }})
-    if: github.event_name != 'pull_request'
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:
@@ -89,7 +87,7 @@ jobs:
   # enroll/delete клону. Якщо падає — latest не оновлюється.
   smoke-arm64:
     name: smoke (linux/arm64)
-    if: github.event_name != 'pull_request'
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
@@ -186,7 +184,7 @@ jobs:
   # Публікація маніфесту лише після успішного arm64-смоуку.
   publish:
     name: publish manifest
-    if: github.event_name != 'pull_request'
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: [build, smoke-arm64]
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -212,7 +210,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=sha,format=short
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest
 
       - name: Create manifest list and push
         env:

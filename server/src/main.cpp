@@ -33,7 +33,7 @@
 #include <vector>
 
 #ifndef HOLOS_VERSION
-#define HOLOS_VERSION "0.7.0"
+#define HOLOS_VERSION "0.7.1"
 #endif
 
 using namespace drogon;
