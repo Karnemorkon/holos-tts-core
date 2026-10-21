@@ -231,5 +231,5 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: ${{ env.IMAGE }}
-          short-description: Ukrainian TTS in C++20: 27 voices, cloning, REST/OpenAI/WS, multi-arch
+          short-description: "Ukrainian TTS in C++20: 27 voices, cloning, REST/OpenAI/WS, multi-arch"
           readme-filepath: ./dockerhub/overview.md
