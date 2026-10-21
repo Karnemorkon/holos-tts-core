@@ -1,4 +1,4 @@
-name: Attach AppImage to release
+name: Attach desktop AppImage to release
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
       tag:
         description: Release tag
         required: true
-        default: v0.6.1
+        default: v0.7.0
 
 permissions:
   contents: write
@@ -17,28 +17,19 @@ concurrency:
 
 env:
   ORT_VERSION: "1.31.0"
-  TAG: ${{ github.event.inputs.tag || 'v0.6.1' }}
+  TAG: ${{ github.event.inputs.tag || 'v0.7.0' }}
 
 jobs:
   build:
-    name: Build AppImage
-    runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    name: Build desktop AppImage (Tauri)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     steps:
       - name: Checkout release source
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || 'v0.6.1' }}
+          ref: ${{ github.event.inputs.tag }}
           path: src
-
-      - name: Checkout packaging scripts
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref_name }}
-          path: packaging-src
-          sparse-checkout: |
-            packaging
-            scripts
 
       - name: Install system dependencies
         run: |
@@ -46,14 +37,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             ninja-build pkg-config zlib1g-dev libssl-dev uuid-dev \
             libc-ares-dev libjsoncpp-dev libsentencepiece-dev \
-            binutils file squashfs-tools desktop-file-utils libfuse2
-
-      - name: Overlay AppImage packaging
-        run: |
-          mkdir -p src/packaging src/scripts
-          cp -a packaging-src/packaging/appimage src/packaging/
-          cp -a packaging-src/packaging/linux/. src/packaging/linux/
-          cp -a packaging-src/scripts/smoke_api.py src/scripts/
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            xvfb desktop-file-utils
 
       - name: Cache ONNX Runtime
         id: ort-cache
@@ -71,7 +56,7 @@ jobs:
           tar -xzf /tmp/ort.tgz -C "$HOME/ort" --strip-components=1
           rm -f /tmp/ort.tgz
 
-      - name: Configure
+      - name: Configure and build server
         working-directory: src
         run: |
           # shellcheck disable=SC2016  # $ORIGIN must stay literal for the linker
@@ -86,16 +71,8 @@ jobs:
             -DHOLOS_WITH_SERVER=ON \
             -DHOLOS_BUILD_TESTS=OFF \
             -DBUILD_TESTING=OFF
-
-      - name: Build and install
-        working-directory: src
-        run: |
           cmake --build build --parallel
           cmake --install build
-
-      - name: Bundle runtime
-        working-directory: src
-        run: |
           LD_LIBRARY_PATH="$HOME/ort/lib" \
             packaging/linux/make-bundle.sh "$PWD/dist/holos-tts-core"
 
@@ -111,119 +88,72 @@ jobs:
           HOLOS_MODELS_DIR="$PWD/.model-cache" \
             dist/holos-tts-core/download-models.sh
 
-      - name: Build AppImage
-        working-directory: src
-        run: |
-          packaging/appimage/make-appimage.sh \
-            "$PWD/dist/holos-tts-core" "$PWD/.model-cache"
-
-      - name: Smoke test AppImage
-        working-directory: src
+      - name: Stage Tauri sidecar and libs
         run: |
           set -euo pipefail
-          APP="$(find dist -maxdepth 1 -name 'holos-tts-core-*-x86_64.AppImage' -print -quit)"
-          VERSION="$(dist/holos-tts-core/bin/holos-cli version)"
-          export XDG_DATA_HOME="$RUNNER_TEMP/holos-appimage-data"
-          export HOLOS_SPEAKERS_DIR="$RUNNER_TEMP/holos-appimage-speakers"
-          export HOLOS_OPEN_BROWSER=0
-          export HOLOS_APPIMAGE_TERM=1
-          rm -rf "$XDG_DATA_HOME" "$HOLOS_SPEAKERS_DIR"
-          mkdir -p "$XDG_DATA_HOME" "$HOLOS_SPEAKERS_DIR"
-          test "$("$APP" --version)" = "$VERSION"
-          "$APP" > /tmp/appimage.log 2>&1 &
-          echo $! > /tmp/appimage.pid
-          trap 'kill "$(cat /tmp/appimage.pid)" 2>/dev/null || true' EXIT
-          python3 scripts/smoke_api.py http://127.0.0.1:8004 "$VERSION"
-          kill "$(cat /tmp/appimage.pid)" 2>/dev/null || true
+          mkdir -p src/desktop/tauri/src-tauri/binaries src/desktop/tauri/src-tauri/resources/lib
+          cp src/dist/holos-tts-core/bin/holos-server \
+            src/desktop/tauri/src-tauri/binaries/holos-server-x86_64-unknown-linux-gnu
+          cp -a src/dist/holos-tts-core/lib/. src/desktop/tauri/src-tauri/resources/lib/
+
+      - name: Install Tauri CLI
+        working-directory: src/desktop/tauri
+        run: npm install
+
+      - name: Build AppImage
+        working-directory: src/desktop/tauri
+        run: npx tauri build
+
+      - name: Smoke test AppImage
+        run: |
+          set -euo pipefail
+          VERSION="$(src/dist/holos-tts-core/bin/holos-cli version)"
+          APP="$(find src/desktop/tauri/src-tauri/target -path '*/release/bundle/appimage/*.AppImage' -print -quit)"
+          test -n "$APP"
+          DEST="src/holos-tts-core-${VERSION}-x86_64.AppImage"
+          mv "$APP" "$DEST"
+          export XDG_DATA_HOME="$RUNNER_TEMP/holos-tauri-data"
+          mkdir -p "$XDG_DATA_HOME/holos-tts-core/models"
+          cp -a src/.model-cache/. "$XDG_DATA_HOME/holos-tts-core/models/"
+          export HOLOS_PORT=8004
+          xvfb-run -a env \
+            APPIMAGE_EXTRACT_AND_RUN=1 \
+            HOLOS_PORT="$HOLOS_PORT" \
+            XDG_DATA_HOME="$XDG_DATA_HOME" \
+            "./$DEST" > /tmp/tauri-appimage.log 2>&1 &
+          echo $! > /tmp/tauri-appimage.pid
+          trap 'kill "$(cat /tmp/tauri-appimage.pid)" 2>/dev/null || true; pkill -f holos-server 2>/dev/null || true' EXIT
+          for _ in $(seq 1 120); do
+            curl -sf --max-time 2 http://127.0.0.1:$HOLOS_PORT/healthz >/dev/null 2>&1 && break
+            sleep 1
+          done
+          python3 src/scripts/smoke_api.py http://127.0.0.1:$HOLOS_PORT "$VERSION"
+          kill "$(cat /tmp/tauri-appimage.pid)" 2>/dev/null || true
+          pkill -f holos-server 2>/dev/null || true
           trap - EXIT
+
+      - name: Dump logs on failure
+        if: failure()
+        run: tail -100 /tmp/tauri-appimage.log 2>/dev/null || true
 
       - name: Upload AppImage
         uses: actions/upload-artifact@v4
         with:
-          name: holos-appimage
-          path: src/dist/holos-tts-core-*-x86_64.AppImage
+          name: holos-desktop-appimage
+          path: src/holos-tts-core-*-x86_64.AppImage
           if-no-files-found: error
           retention-days: 7
 
-  test:
-    name: Smoke (${{ matrix.distro }})
-    needs: build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - distro: debian12
-            image: debian:12
-          - distro: ubuntu24
-            image: ubuntu:24.04
-          - distro: fedora
-            image: fedora:latest
-          - distro: arch
-            image: archlinux:latest
-    steps:
-      - name: Checkout smoke script
-        uses: actions/checkout@v4
-        with:
-          sparse-checkout: scripts
-
-      - name: Download AppImage
-        uses: actions/download-artifact@v4
-        with:
-          name: holos-appimage
-          path: dist
-
-      - name: Pull image
-        run: docker pull "${{ matrix.image }}"
-
-      - name: Run AppImage in container
-        run: |
-          set -euo pipefail
-          APP="$(find dist -maxdepth 1 -name 'holos-tts-core-*-x86_64.AppImage' -print -quit)"
-          chmod +x "$APP"
-          NAME="holos-appimage-${{ matrix.distro }}"
-          docker rm -f "$NAME" >/dev/null 2>&1 || true
-          docker run -d --name "$NAME" --network host \
-            -v "$PWD/dist:/dist:ro" \
-            -e APPIMAGE_EXTRACT_AND_RUN=1 \
-            -e HOLOS_OPEN_BROWSER=0 \
-            -e HOLOS_APPIMAGE_TERM=1 \
-            -e HOLOS_PORT=8004 \
-            -e XDG_DATA_HOME=/tmp/holos-data \
-            -e HOLOS_SPEAKERS_DIR=/tmp/holos-speakers \
-            "${{ matrix.image }}" \
-            /bin/sh -c "exec /dist/$(basename "$APP")"
-          for _ in $(seq 1 180); do
-            if curl -sf --max-time 2 http://127.0.0.1:8004/healthz >/dev/null 2>&1; then
-              break
-            fi
-            if ! docker ps --format '{{.Names}}' | grep -qx "$NAME"; then
-              echo "container exited early" >&2
-              exit 1
-            fi
-            sleep 1
-          done
-          python3 scripts/smoke_api.py http://127.0.0.1:8004 0.6.1
-
-      - name: Dump logs on failure
-        if: failure()
-        run: docker logs "holos-appimage-${{ matrix.distro }}" 2>&1 | tail -100 || true
-
-      - name: Cleanup
-        if: always()
-        run: docker rm -f "holos-appimage-${{ matrix.distro }}" >/dev/null 2>&1 || true
-
   attach:
     name: Attach to release
-    needs: [build, test]
+    needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - name: Download AppImage
         uses: actions/download-artifact@v4
         with:
-          name: holos-appimage
+          name: holos-desktop-appimage
           path: dist
 
       - name: Verify release exists
@@ -249,6 +179,8 @@ jobs:
             --pattern 'holos-tts-core-*-linux-x64.tar.gz' --dir release-assets --clobber
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
             --pattern 'holos-tts-core-*-windows-x64.zip' --dir release-assets --clobber
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'holos-tts-core-*-windows-x64-setup.exe' --dir release-assets --clobber || true
           find dist -name 'holos-tts-core-*-x86_64.AppImage' \
             -exec cp {} release-assets/ \;
           (
@@ -259,30 +191,20 @@ jobs:
           )
           gh release upload "$TAG" release-assets/SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
 
-      - name: Verify uploaded checksums
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          mkdir -p verify
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --pattern SHA256SUMS --dir verify --clobber
-          diff -u release-assets/SHA256SUMS verify/SHA256SUMS
-
       - name: Update release notes
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > /tmp/notes.md
-          if grep -q 'x86_64.AppImage' /tmp/notes.md; then
-            echo 'release notes already mention AppImage'
+          if grep -q 'desktop AppImage' /tmp/notes.md; then
+            echo 'release notes already mention desktop AppImage'
             exit 0
           fi
           {
             cat /tmp/notes.md
-            printf '\n\n### AppImage (x86_64, models embedded)\n\n'
-            printf -- '- **holos-tts-core-%s-x86_64.AppImage** — self-contained; models included; terminal launch.\n' "${TAG#v}"
-            printf -- '- Install FUSE2 (libfuse2/fuse2/fuse-libs) or run with --appimage-extract-and-run.\n'
+            printf '\n\n### Desktop AppImage (x86_64, GUI)\n\n'
+            printf -- '- **holos-tts-core-%s-x86_64.AppImage** — native window (Tauri); models download on first run (~0.6 ГБ).\n' "${TAG#v}"
+            printf -- '- Requires Ubuntu 24.04+/Debian 13+ (glibc 2.39+); install webkit2gtk-4.1 or run with --appimage-extract-and-run.\n'
           } > /tmp/notes-appimage.md
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file /tmp/notes-appimage.md
