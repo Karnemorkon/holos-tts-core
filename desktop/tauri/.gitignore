@@ -1,0 +1,13 @@
+# Rust / Tauri build
+src-tauri/target/
+node_modules/
+
+# Staged in CI before `tauri build`
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+src-tauri/resources/lib/*
+!src-tauri/resources/lib/.gitkeep
+
+# Mobile icon sets are not used
+src-tauri/icons/android/
+src-tauri/icons/ios/
