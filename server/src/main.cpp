@@ -656,10 +656,10 @@ public:
         std::string errs;
         std::istringstream ss(message);
         if (!Json::parseFromStream(builder, ss, &cfg, &errs)) {
-            conn->send(std::string(R"({"error":"невірний JSON"})"),
-                       drogon::WebSocketMessageType::Text);
-            conn->forceClose();
-            return;
+                conn->send(std::string(R"({"error":"невірний JSON"})"),
+                           drogon::WebSocketMessageType::Text);
+                conn->shutdown();
+                return;
         }
 
         // {"cancel":true} під час активного синтезу — зупинка.
@@ -678,7 +678,7 @@ public:
             Json::Value e; e["error"] = err;
             conn->send(Json::writeString(Json::StreamWriterBuilder(), e),
                        drogon::WebSocketMessageType::Text);
-            conn->forceClose();
+            conn->shutdown();
             return;
         }
 
@@ -722,7 +722,7 @@ public:
                 conn->send(Json::writeString(Json::StreamWriterBuilder(), er),
                            drogon::WebSocketMessageType::Text);
             }
-            conn->forceClose();
+            conn->shutdown(); // graceful: дописати буфер (фінальний JSON/чанки) перед закриттям
         }).detach();
     }
 
