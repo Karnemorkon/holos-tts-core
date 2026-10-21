@@ -194,7 +194,7 @@ jobs:
         working-directory: desktop/tauri
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1"
-        run: npx tauri build
+        run: npx tauri build --verbose
 
       - name: Smoke test AppImage
         run: |
