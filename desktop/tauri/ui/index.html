@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HolosTTS</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#0f1115;color:#e6e6e6;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.card{background:#171a21;border:1px solid #2a2f3a;border-radius:12px;padding:2rem;max-width:520px;width:100%}
+h1{font-size:1.4rem;margin:0 0 .5rem}
+.sub{color:#9aa0aa;font-size:.9rem;margin-bottom:1.25rem}
+.status{font-size:.9rem;margin-bottom:1rem;min-height:1.2em}
+.status.err{color:#ff6b6b}
+.status.ok{color:#51cf66}
+.bar{height:10px;background:#0f1115;border:1px solid #2a2f3a;border-radius:6px;overflow:hidden;margin:.6rem 0}
+.fill{height:100%;width:0%;background:#4c9aff;transition:width .2s}
+button{background:#2563eb;color:#fff;border:0;border-radius:8px;padding:.65rem 1.2rem;font:inherit;font-weight:600;cursor:pointer}
+button:disabled{opacity:.5;cursor:default}
+.hint{color:#9aa0aa;font-size:.8rem;margin-top:.8rem;word-break:break-all}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>HolosTTS</h1>
+  <div class="sub">Український синтез мовлення</div>
+  <div class="status" id="st"></div>
+  <div class="bar" id="bar" style="display:none"><div class="fill" id="fill"></div></div>
+  <button id="btn" style="display:none">Завантажити моделі</button>
+  <div class="hint" id="hint"></div>
+</div>
+<script>
+const invoke=window.__TAURI__.core.invoke;
+const listen=window.__TAURI__.event.listen;
+const st=$("st"),btn=$("btn"),bar=$("bar"),fill=$("fill"),hint=$("hint");
+function $(id){return document.getElementById(id)}
+
+async function boot(){
+  try{
+    const s=await invoke("models_status");
+    hint.textContent=s.models_dir;
+    const missing=s.files.filter(f=>!f.have);
+    if(missing.length){
+      st.textContent=`Потрібно завантажити ${missing.length} файлів моделей (~0.6 ГБ)`;
+      btn.style.display="";
+      btn.onclick=download;
+      return;
+    }
+    await startServer();
+  }catch(e){fail(e)}
+}
+
+async function download(){
+  btn.disabled=true;
+  bar.style.display="";
+  st.textContent="Завантаження моделей…";
+  const un=await listen("download-progress",ev=>{
+    const p=ev.payload;
+    const pct=p.file_bytes?Math.round((p.downloaded/p.file_bytes)*100):0;
+    fill.style.width=pct+"%";
+    st.textContent=`${p.file}: ${pct}% (${p.index+1}/${p.total_files})`;
+  });
+  try{
+    await invoke("download_models");
+    st.textContent="Моделі завантажено";
+    await startServer();
+  }catch(e){fail(e)}
+  finally{un()}
+}
+
+async function startServer(){
+  st.textContent="Запуск сервера…";
+  btn.style.display="none";
+  bar.style.display="";
+  fill.style.width="100%";
+  const url=await invoke("start_server");
+  location.href=url;
+}
+
+function fail(e){
+  st.textContent=String(e);
+  st.className="status err";
+  btn.disabled=false;
+}
+
+boot();
+</script>
+</body>
+</html>
