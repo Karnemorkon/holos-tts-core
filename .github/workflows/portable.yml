@@ -121,7 +121,7 @@ jobs:
             ninja-build pkg-config zlib1g-dev libssl-dev uuid-dev \
             libc-ares-dev libjsoncpp-dev libsentencepiece-dev \
             libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
-            xvfb desktop-file-utils libfuse2t64
+            xvfb file desktop-file-utils
 
       - name: Cache ONNX Runtime
         id: ort-cache
@@ -190,24 +190,94 @@ jobs:
         working-directory: desktop/tauri
         run: npm install
 
-      - name: Build AppImage
+      - name: Build launcher binary
         working-directory: desktop/tauri
-        env:
-          APPIMAGE_EXTRACT_AND_RUN: "1"
-        # ldd linuxdeploy має бачити ONNX Runtime та встановлені ліби,
-        # інакше "Could not find dependency: libonnxruntime.so.1"
+        run: npx tauri build --no-bundle
+
+      # AppImage збираємо вручну: всередині лише наші файли, а WebKit/GTK/
+      # GStreamer беруться з системи. Інакше linuxdeploy пакує стек Ubuntu
+      # 24.04, який на Debian 13 валить WebKitWebProcess (білий екран).
+      - name: Assemble AppImage
         run: |
-          export LD_LIBRARY_PATH="$HOME/ort/lib:$GITHUB_WORKSPACE/dist/holos-tts-core/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          npx tauri build --verbose
+          set -euo pipefail
+          VERSION="$(dist/holos-tts-core/bin/holos-cli version)"
+          DEST="holos-tts-core-${VERSION}-x86_64.AppImage"
+          APPDIR="$PWD/build/appimage"
+          rm -rf "$APPDIR"
+          mkdir -p \
+            "$APPDIR/usr/bin" \
+            "$APPDIR/usr/lib/HolosTTS/lib" \
+            "$APPDIR/usr/share/applications" \
+            "$APPDIR/usr/share/icons/hicolor/256x256/apps"
+
+          cp desktop/tauri/src-tauri/target/release/holos-tts "$APPDIR/usr/bin/holos-tts"
+          cp dist/holos-tts-core/bin/holos-server "$APPDIR/usr/bin/holos-server"
+          cp -a dist/holos-tts-core/lib/. "$APPDIR/usr/lib/HolosTTS/lib/"
+
+          cat > "$APPDIR/HolosTTS.desktop" <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=HolosTTS
+          Comment=Ukrainian text-to-speech
+          Exec=holos-tts
+          Icon=holos-tts
+          Terminal=false
+          Categories=AudioVideo;Audio;
+          EOF
+          cp "$APPDIR/HolosTTS.desktop" "$APPDIR/usr/share/applications/HolosTTS.desktop"
+
+          cp desktop/tauri/src-tauri/icons/128x128@2x.png "$APPDIR/holos-tts.png"
+          cp "$APPDIR/holos-tts.png" \
+            "$APPDIR/usr/share/icons/hicolor/256x256/apps/holos-tts.png"
+          ln -sf holos-tts.png "$APPDIR/.DirIcon"
+
+          cat > "$APPDIR/AppRun" <<'EOF'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          export APPDIR="$HERE"
+          # LD_LIBRARY_PATH навмисно не чіпаємо: лаунчер і WebKit мають бачити
+          # системні бібліотеки. Наші ліби сайдкар отримує від лаунчера.
+          LDCONFIG="$(command -v ldconfig || true)"
+          if [ -n "$LDCONFIG" ] && ! "$LDCONFIG" -p 2>/dev/null | grep -q 'libwebkit2gtk-4.1.so.0'; then
+            MSG="HolosTTS потребує WebKitGTK 4.1. Встановіть: sudo apt install libwebkit2gtk-4.1-0"
+            if command -v zenity >/dev/null 2>&1; then zenity --error --text="$MSG"; fi
+            echo "$MSG" >&2
+            exit 1
+          fi
+          exec "$HERE/usr/bin/holos-tts" "$@"
+          EOF
+          chmod +x "$APPDIR/AppRun"
+
+          curl -fsSL -o /tmp/appimagetool \
+            "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage"
+          chmod +x /tmp/appimagetool
+          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 \
+            /tmp/appimagetool "$APPDIR" "$DEST"
+
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "DEST=$DEST" >> "$GITHUB_ENV"
+          ls -lh "$DEST"
+
+      - name: Verify AppImage has no bundled GUI stack
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/appdir-check && mkdir -p /tmp/appdir-check
+          (cd /tmp/appdir-check && "$GITHUB_WORKSPACE/$DEST" --appimage-extract >/dev/null)
+          test -x /tmp/appdir-check/squashfs-root/AppRun
+          if find /tmp/appdir-check/squashfs-root \
+              \( -name 'libwebkit2gtk*' -o -name 'libjavascriptcoregtk*' \
+                 -o -name 'libgtk-3*' -o -name 'libgdk-3*' \
+                 -o -name 'libglib-2.0*' -o -name 'libgio-2.0*' \
+                 -o -name 'libgobject-2.0*' -o -name 'libgst*' \
+                 -o -name 'WebKitWebProcess' -o -name 'WebKitNetworkProcess' \) \
+              -print -quit | grep -q .; then
+            echo "AppImage містить системні GUI-бібліотеки" >&2
+            exit 1
+          fi
 
       - name: Smoke test AppImage
         run: |
           set -euo pipefail
-          VERSION="$(dist/holos-tts-core/bin/holos-cli version)"
-          APP="$(find desktop/tauri/src-tauri/target -path '*/release/bundle/appimage/*.AppImage' -print -quit)"
-          test -n "$APP"
-          DEST="holos-tts-core-${VERSION}-x86_64.AppImage"
-          mv "$APP" "$DEST"
           export XDG_DATA_HOME="$RUNNER_TEMP/holos-tauri-data"
           mkdir -p "$XDG_DATA_HOME/holos-tts-core/models"
           cp -a .model-cache/. "$XDG_DATA_HOME/holos-tts-core/models/"
@@ -231,7 +301,9 @@ jobs:
 
       - name: Dump logs on failure
         if: failure()
-        run: tail -100 /tmp/tauri-appimage.log 2>/dev/null || true
+        run: |
+          tail -100 /tmp/tauri-appimage.log 2>/dev/null || true
+          tail -100 "$RUNNER_TEMP/holos-tauri-data/holos-tts-core/logs/sidecar.log" 2>/dev/null || true
 
       - name: Upload AppImage
         uses: actions/upload-artifact@v4
