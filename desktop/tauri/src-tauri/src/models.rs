@@ -1,11 +1,14 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 const HF_BASE: &str = "https://huggingface.co/Morkon/holos-native-models/resolve/main";
+const MAX_ATTEMPTS: u32 = 3;
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 
 // (HF path, relative dest) — дзеркало packaging/linux/download-models.sh
 const FILES: &[(&str, &str)] = &[
@@ -97,10 +100,11 @@ struct Progress {
     file_bytes: u64,
 }
 
-pub fn download_all(app: &AppHandle) -> Result<(), String> {
+pub async fn download_all(app: &AppHandle) -> Result<(), String> {
     let dir = models_dir();
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(30))
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(30))
+        .read_timeout(Duration::from_secs(60))
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -113,36 +117,89 @@ pub fn download_all(app: &AppHandle) -> Result<(), String> {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let url = format!("{HF_BASE}/{src}");
-        let mut resp = client.get(&url).send().map_err(|e| format!("{dst}: {e}"))?;
-        if !resp.status().is_success() {
-            return Err(format!("{dst}: HTTP {}", resp.status()));
-        }
-        let file_bytes = resp.content_length().unwrap_or(0);
         let part = out.with_extension("part");
-        let mut f = fs::File::create(&part).map_err(|e| e.to_string())?;
-        let mut downloaded = 0u64;
-        let mut buf = [0u8; 64 * 1024];
-        loop {
-            use std::io::Read;
-            let n = resp.read(&mut buf).map_err(|e| format!("{dst}: {e}"))?;
-            if n == 0 {
-                break;
+        let mut last_err = String::new();
+        let mut done = false;
+        for attempt in 1..=MAX_ATTEMPTS {
+            match download_one(app, &client, &url, dst, i, &part).await {
+                Ok(()) => {
+                    done = true;
+                    break;
+                }
+                Err(e) => {
+                    last_err = e;
+                    let _ = fs::remove_file(&part);
+                    if attempt < MAX_ATTEMPTS {
+                        tokio::time::sleep(Duration::from_secs(1 << (attempt - 1))).await;
+                    }
+                }
             }
-            f.write_all(&buf[..n]).map_err(|e| e.to_string())?;
-            downloaded += n as u64;
+        }
+        if !done {
+            return Err(last_err);
+        }
+        fs::rename(&part, &out).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+async fn download_one(
+    app: &AppHandle,
+    client: &reqwest::Client,
+    url: &str,
+    dst: &str,
+    index: usize,
+    part: &Path,
+) -> Result<(), String> {
+    let mut resp = client.get(url).send().await.map_err(|e| format!("{dst}: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("{dst}: HTTP {}", resp.status()));
+    }
+    let file_bytes = resp.content_length().unwrap_or(0);
+    let mut f = fs::File::create(part).map_err(|e| format!("{dst}: {e}"))?;
+    let mut downloaded = 0u64;
+    let mut last_emit = Instant::now();
+    let _ = app.emit(
+        "download-progress",
+        Progress {
+            file: dst.to_string(),
+            index,
+            total_files: FILES.len(),
+            downloaded: 0,
+            file_bytes,
+        },
+    );
+    while let Some(chunk) = resp.chunk().await.map_err(|e| format!("{dst}: {e}"))? {
+        f.write_all(&chunk).map_err(|e| format!("{dst}: {e}"))?;
+        downloaded += chunk.len() as u64;
+        if last_emit.elapsed() >= PROGRESS_INTERVAL {
             let _ = app.emit(
                 "download-progress",
                 Progress {
                     file: dst.to_string(),
-                    index: i,
+                    index,
                     total_files: FILES.len(),
                     downloaded,
                     file_bytes,
                 },
             );
+            last_emit = Instant::now();
         }
-        drop(f);
-        fs::rename(&part, &out).map_err(|e| e.to_string())?;
     }
+    f.flush().map_err(|e| format!("{dst}: {e}"))?;
+    drop(f);
+    if file_bytes > 0 && downloaded != file_bytes {
+        return Err(format!("{dst}: отримано {downloaded} з {file_bytes} байт"));
+    }
+    let _ = app.emit(
+        "download-progress",
+        Progress {
+            file: dst.to_string(),
+            index,
+            total_files: FILES.len(),
+            downloaded,
+            file_bytes: file_bytes.max(downloaded),
+        },
+    );
     Ok(())
 }

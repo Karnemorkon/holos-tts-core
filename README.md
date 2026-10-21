@@ -37,8 +37,8 @@ Python у рантаймі. Перший запуск сам довантажу�
 - **Потоковий синтез**: REST-стрім (`/v1/audio/speech`) і WebSocket `/api/ws/synthesize` (PCM16-чанки)
 - **API-паритет з HolosTTS-hybrid**: тривалість аудіо Δ ≤0.02 с; та сама схема запитів/відповідей
 - **Docker**: multi-stage образ ~290 МБ, named volumes, healthcheck, ліміти CPU/RAM, ротація логів
-- **Портативні збірки без Docker**: Linux x64 (AppImage із вбудованими моделями, tar.gz)
-  і Windows x64 (zip); tar.gz/zip довантажують моделі при першому запуску
+- **Портативні збірки без Docker**: Linux x64 (AppImage з GUI-лаунчером, tar.gz)
+  і Windows x64 (NSIS-інсталятор, zip); AppImage/інсталятор довантажують моделі при першому запуску
 - **Тести**: 81 unit/golden-тест; golden-гейти verbalizer 46/46 і voice encoder cos 0.99998
 
 ## Швидкий старт
@@ -112,8 +112,9 @@ services:
 python3 scripts/download_models.py --out models`) і змонтувати каталог
 `-v $PWD/models:/app/models:ro` замість named volume.
 
-Теги: `latest` — поточна `main`, multi-arch **linux/amd64 + linux/arm64**;
-`sha-<короткий>` — конкретний коміт; `vX.Y.Z` (наприклад `0.6.1`) — пін релізу.
+Теги: `latest` — останній релізний тег, multi-arch **linux/amd64 + linux/arm64**;
+`sha-<короткий>` — конкретний коміт; `vX.Y.Z` (наприклад `0.7.1`) — пін релізу.
+Docker Hub публікується лише з тегів `v*`.
 arm64-образ збирається нативно та проходить runtime-смоук (healthz + синтез + клон)
 у CI перед публікацією маніфесту.
 
@@ -122,40 +123,33 @@ arm64-образ збирається нативно та проходить run
 
 Готові файли — у [Releases](https://github.com/Karnemorkon/holos-tts-core/releases):
 `holos-tts-core-<версія>-x86_64.AppImage`,
+`holos-tts-core-<версія>-windows-x64-setup.exe`,
 `holos-tts-core-<версія>-linux-x64.tar.gz` і `holos-tts-core-<версія>-windows-x64.zip`.
-AppImage — самодостатній (~0.6 ГБ): моделі всередині, працює офлайн.
-tar.gz/zip — легкі (~17/12 МБ): моделі довантажує скрипт при першому запуску.
+AppImage (GUI) і NSIS-інсталятор при першому запуску завантажують моделі (~0.6 ГБ);
+tar.gz/zip — легкі (~17/12 МБ) і теж довантажують моделі скриптом.
 
-**Linux x64 AppImage** (Ubuntu 22.04+, Debian 12+, Fedora 36+, Arch; glibc ≥ 2.35):
+**Linux x64 AppImage** (GUI, Tauri; Debian 13+/Ubuntu 24.04+, glibc ≥ 2.39):
 
 ```bash
-chmod +x holos-tts-core-0.6.1-x86_64.AppImage
-./holos-tts-core-0.6.1-x86_64.AppImage   # UI: http://127.0.0.1:8004/
+chmod +x holos-tts-core-0.7.1-x86_64.AppImage
+./holos-tts-core-0.7.1-x86_64.AppImage
 ```
 
-- Подвійний клік (з Dolphin/менеджера файлів) відкриває **вікно терміналу** з логами;
-  потрібен один із: `konsole`, `gnome-terminal`, `xfce4-terminal`, `mate-terminal`,
-  `x-terminal-emulator`, `kitty`, `alacritty`, `foot`, `xterm`. Фонового «тихого»
-  запуску немає — без терміналу AppImage завершиться з підказкою.
-- Зупинка: `Ctrl+C` у вікні терміналу або `./holos-tts-core-0.6.1-x86_64.AppImage --stop`
-  (працює і для запущеного подвійним кліком; pid-файл + SIGTERM/SIGKILL).
-- Другий екземпляр одразу завершується з повідомленням «порт зайнятий».
-- Моделі вбудовані; перший запуск не потребує мережі.
-- Браузер відкривається автоматично після готовності сервера
-  (`HOLOS_OPEN_BROWSER=0` — без браузера); якщо не відкрився — див.
-  `~/.local/share/holos-tts-core/browser.log`.
-- Потрібен FUSE2: Debian/Ubuntu — `libfuse2` або `libfuse2t64`, Arch — `fuse2`,
-  Fedora — `fuse-libs`. Без FUSE: `./holos-tts-core-0.6.1-x86_64.AppImage --appimage-extract-and-run`.
-- Дані, клоновані голоси й логи: `${XDG_DATA_HOME:-~/.local/share}/holos-tts-core`;
-  `HOLOS_SPEAKERS_DIR` змінює каталог голосів.
-- `HOLOS_MODELS_DIR`, `HOLOS_VERBALIZER_DIR`, `HOLOS_VOICE_ENCODER` уже вказують
-  на вбудовані моделі; `HOLOS_VERBALIZER_DIR=""` вмикає rule-only.
-- `--cli`, `--version`, `--help`, `--stop` — CLI, довідка та зупинка.
+- Відкриває нативне вікно HolosTTS; перший запуск завантажує моделі (~0.6 ГБ)
+  у `${XDG_DATA_HOME:-~/.local/share}/holos-tts-core/models` з прогресом і кнопкою
+  «Повторити» у разі помилки.
+- Потрібен системний WebKitGTK 4.1 (Debian/Ubuntu: `libwebkit2gtk-4.1-0`; зазвичай
+  уже встановлений). WebKit/GTK/GStreamer в AppImage **не** входять.
+- Потрібен FUSE2: Debian/Ubuntu — `libfuse2t64`, Arch — `fuse2`, Fedora — `fuse-libs`.
+  Без FUSE: `APPIMAGE_EXTRACT_AND_RUN=1 ./holos-tts-core-0.7.1-x86_64.AppImage`.
+- Закриття вікна зупиняє сервер; логи сайдкара —
+  `~/.local/share/holos-tts-core/logs/sidecar.log`.
+- `HOLOS_PORT` — фіксований порт; `XDG_DATA_HOME` — інший каталог даних.
 
 **Linux x64 tar.gz** (glibc ≥ 2.35, тобто Ubuntu 22.04+; решта бібліотек у комплекті):
 
 ```bash
-tar xzf holos-tts-core-0.6.1-linux-x64.tar.gz
+tar xzf holos-tts-core-0.7.1-linux-x64.tar.gz
 cd holos-tts-core
 ./download-models.sh
 ./holos-tts.sh          # UI: http://127.0.0.1:8004/
@@ -164,18 +158,18 @@ cd holos-tts-core
 **Windows x64** (Windows 10/11 + Visual C++ Redistributable 2015-2022):
 
 ```powershell
-Expand-Archive holos-tts-core-0.6.1-windows-x64.zip -DestinationPath .
+Expand-Archive holos-tts-core-0.7.1-windows-x64.zip -DestinationPath .
 cd holos-tts-core
 powershell -ExecutionPolicy Bypass -File download-models.ps1
 holos-tts.bat
 ```
 
-Типово сервіс слухає `127.0.0.1:8004`; `HOLOS_PORT` змінює порт, `HOLOS_HOST=0.0.0.0`
-відкриває для LAN (без автентифікації). У tar.gz/zip моделі та клоновані голоси
-лежать у `models/` і `speakers/` поруч із лаунчером, тож каталог можна переносити
-цілком; в AppImage моделі всередині образу, а голоси та логи — у
-`~/.local/share/holos-tts-core`. Типово використовується neural verbalizer і 80%
-ядер CPU для ONNX Runtime.
+Типово сервіс слухає `127.0.0.1:8004` (AppImage обирає вільний порт, `HOLOS_PORT`
+фіксує його); `HOLOS_HOST=0.0.0.0` відкриває для LAN (без автентифікації).
+У tar.gz/zip моделі та клоновані голоси лежать у `models/` і `speakers/` поруч
+із лаунчером, тож каталог можна переносити цілком; в AppImage моделі, голоси й
+логи — у `${XDG_DATA_HOME:-~/.local/share}/holos-tts-core`. Типово
+використовується neural verbalizer і 80% ядер CPU для ONNX Runtime.
 
 ## Клонування голосу
 
@@ -472,8 +466,8 @@ docker/        multi-stage Dockerfile
 - **M9** ✅ ARM64: multi-arch маніфест amd64+arm64 нативними runners (без QEMU),
   runtime-смоук arm64 (healthz + синтез + enroll/delete клону) перед публікацією `latest`
 
-- **M10** ✅ портативні збірки без Docker: Linux x64 AppImage (моделі всередині) +
-  tar.gz, Windows x64 zip; tar.gz/zip довантажують моделі, AppImage працює офлайн;
+- **M10** ✅ портативні збірки без Docker: Linux x64 AppImage (Tauri GUI) +
+  tar.gz, Windows x64 NSIS/zip; усі довантажують моделі при першому запуску;
   смоук у CI перед релізом
 
 Надалі:
