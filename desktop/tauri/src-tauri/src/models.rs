@@ -100,7 +100,7 @@ struct Progress {
 pub fn download_all(app: &AppHandle) -> Result<(), String> {
     let dir = models_dir();
     let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
+        .connect_timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -121,25 +121,25 @@ pub fn download_all(app: &AppHandle) -> Result<(), String> {
         let part = out.with_extension("part");
         let mut f = fs::File::create(&part).map_err(|e| e.to_string())?;
         let mut downloaded = 0u64;
+        let mut buf = [0u8; 64 * 1024];
         loop {
-            let chunk = resp.chunk().map_err(|e| format!("{dst}: {e}"))?;
-            match chunk {
-                Some(c) => {
-                    f.write_all(&c).map_err(|e| e.to_string())?;
-                    downloaded += c.len() as u64;
-                    let _ = app.emit(
-                        "download-progress",
-                        Progress {
-                            file: dst.to_string(),
-                            index: i,
-                            total_files: FILES.len(),
-                            downloaded,
-                            file_bytes,
-                        },
-                    );
-                }
-                None => break,
+            use std::io::Read;
+            let n = resp.read(&mut buf).map_err(|e| format!("{dst}: {e}"))?;
+            if n == 0 {
+                break;
             }
+            f.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+            downloaded += n as u64;
+            let _ = app.emit(
+                "download-progress",
+                Progress {
+                    file: dst.to_string(),
+                    index: i,
+                    total_files: FILES.len(),
+                    downloaded,
+                    file_bytes,
+                },
+            );
         }
         drop(f);
         fs::rename(&part, &out).map_err(|e| e.to_string())?;

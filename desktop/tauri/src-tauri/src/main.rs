@@ -8,10 +8,10 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager, State};
-use tauri_plugin_shell::process::Child;
+use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
-struct ServerChild(Mutex<Option<Child>>);
+struct ServerChild(Mutex<Option<CommandChild>>);
 
 fn free_port() -> Option<u16> {
     TcpListener::bind("127.0.0.1:0").ok().and_then(|l| l.local_addr().ok()).map(|a| a.port())
@@ -106,7 +106,7 @@ fn main() {
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 let state = app.state::<ServerChild>();
-                if let Some(mut child) = state.0.lock().unwrap().take() {
+                if let Some(child) = state.0.lock().unwrap().take() {
                     let _ = child.kill();
                 }
             }
