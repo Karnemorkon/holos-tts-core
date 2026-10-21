@@ -209,7 +209,6 @@ jobs:
           images: ${{ env.IMAGE }}
           tags: |
             type=semver,pattern={{version}}
-            type=sha,format=short
             type=raw,value=latest
 
       - name: Create manifest list and push
@@ -223,3 +222,14 @@ jobs:
 
       - name: Inspect image
         run: docker buildx imagetools inspect ${{ env.IMAGE }}:latest
+
+      - uses: actions/checkout@v4
+
+      - name: Sync Docker Hub overview
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.IMAGE }}
+          short-description: "Ukrainian TTS in C++20: 27 voices, cloning, REST/OpenAI/WS, multi-arch"
+          readme-filepath: ./dockerhub/overview.md
