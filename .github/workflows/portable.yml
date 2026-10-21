@@ -121,7 +121,7 @@ jobs:
             ninja-build pkg-config zlib1g-dev libssl-dev uuid-dev \
             libc-ares-dev libjsoncpp-dev libsentencepiece-dev \
             libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
-            xvfb desktop-file-utils
+            xvfb desktop-file-utils libfuse2t64
 
       - name: Cache ONNX Runtime
         id: ort-cache
@@ -192,6 +192,8 @@ jobs:
 
       - name: Build AppImage
         working-directory: desktop/tauri
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
         run: npx tauri build
 
       - name: Smoke test AppImage
