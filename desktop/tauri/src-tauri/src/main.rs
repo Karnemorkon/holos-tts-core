@@ -105,8 +105,8 @@ fn main() {
         .expect("error while running tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
-                let state = app.state::<ServerChild>();
-                if let Some(child) = state.0.lock().unwrap().take() {
+                let child = app.state::<ServerChild>().0.lock().unwrap().take();
+                if let Some(child) = child {
                     let _ = child.kill();
                 }
             }
