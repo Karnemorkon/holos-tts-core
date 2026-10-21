@@ -43,45 +43,59 @@ async function boot(){
     const missing=s.files.filter(f=>!f.have);
     if(missing.length){
       st.textContent=`Потрібно завантажити ${missing.length} файлів моделей (~0.6 ГБ)`;
+      btn.textContent="Завантажити моделі";
+      btn.disabled=false;
       btn.style.display="";
       btn.onclick=download;
       return;
     }
     await startServer();
-  }catch(e){fail(e)}
+  }catch(e){fail(e,boot)}
 }
 
 async function download(){
+  btn.style.display="none";
   btn.disabled=true;
   bar.style.display="";
+  st.className="status";
   st.textContent="Завантаження моделей…";
   const un=await listen("download-progress",ev=>{
     const p=ev.payload;
-    const pct=p.file_bytes?Math.round((p.downloaded/p.file_bytes)*100):0;
-    fill.style.width=pct+"%";
-    st.textContent=`${p.file}: ${pct}% (${p.index+1}/${p.total_files})`;
+    const per=p.file_bytes?p.downloaded/p.file_bytes:0;
+    const overall=Math.min(100,Math.round(((p.index+per)/p.total_files)*100));
+    fill.style.width=overall+"%";
+    st.textContent=p.file_bytes
+      ?`${p.file}: ${Math.round(per*100)}% (${p.index+1}/${p.total_files})`
+      :`${p.file}: ${(p.downloaded/1048576).toFixed(1)} МБ (${p.index+1}/${p.total_files})`;
   });
   try{
     await invoke("download_models");
     st.textContent="Моделі завантажено";
     await startServer();
-  }catch(e){fail(e)}
+  }catch(e){fail(e,download)}
   finally{un()}
 }
 
 async function startServer(){
-  st.textContent="Запуск сервера…";
   btn.style.display="none";
+  btn.disabled=true;
   bar.style.display="";
+  st.className="status";
+  st.textContent="Запуск сервера…";
   fill.style.width="100%";
-  const url=await invoke("start_server");
-  location.href=url;
+  try{
+    const url=await invoke("start_server");
+    location.href=url;
+  }catch(e){fail(e,startServer)}
 }
 
-function fail(e){
+function fail(e,retry){
   st.textContent=String(e);
   st.className="status err";
+  btn.style.display="";
   btn.disabled=false;
+  btn.textContent="Повторити";
+  btn.onclick=retry||boot;
 }
 
 boot();
