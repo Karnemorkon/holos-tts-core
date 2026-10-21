@@ -194,7 +194,11 @@ jobs:
         working-directory: desktop/tauri
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1"
-        run: npx tauri build --verbose
+        # ldd linuxdeploy має бачити ONNX Runtime та встановлені ліби,
+        # інакше "Could not find dependency: libonnxruntime.so.1"
+        run: |
+          export LD_LIBRARY_PATH="$HOME/ort/lib:$GITHUB_WORKSPACE/dist/holos-tts-core/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          npx tauri build --verbose
 
       - name: Smoke test AppImage
         run: |
