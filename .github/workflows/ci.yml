@@ -66,3 +66,34 @@ jobs:
 
       - name: CLI smoke
         run: ./build/holos-cli version
+
+  tauri-check:
+    name: tauri cargo check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libssl-dev pkg-config
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/tauri/src-tauri/target
+          key: cargo-check-${{ hashFiles('desktop/tauri/src-tauri/Cargo.lock') }}
+
+      - name: Place dummy sidecar
+        run: |
+          mkdir -p desktop/tauri/src-tauri/binaries
+          touch desktop/tauri/src-tauri/binaries/holos-server-x86_64-unknown-linux-gnu
+
+      - name: cargo check
+        working-directory: desktop/tauri/src-tauri
+        run: cargo check
