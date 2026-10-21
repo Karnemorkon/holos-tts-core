@@ -18,19 +18,22 @@
 #include <json/json.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #ifndef HOLOS_VERSION
-#define HOLOS_VERSION "0.6.1"
+#define HOLOS_VERSION "0.7.0"
 #endif
 
 using namespace drogon;
@@ -307,31 +310,46 @@ std::string validate_synth_cfg(const Json::Value& j, std::string& text, std::str
 // Синтез по частинах + відправлення PCM16-чанків через колбек (спільний для stream/WS).
 // Повертає duration_sec. Колбек: (const int16_t* pcm, size_t n) -> bool (false = стоп).
 // tm: опційне інструментування (TTFB = час до першого готового чанка).
+// cancel: атомарний прапорець — перевірка перед кожною частиною (grain = 1 речення).
+// progress: (phase, current, total); phase: "verbalize"|"phonemize"|"synth" (current/total
+//   мають сенс лише для "synth"). *cancelled = true якщо зупинено через cancel/стоп-колбек.
+using ProgressFn = std::function<void(const std::string& phase, int current, int total)>;
+
 template <typename SendFn>
 double synth_stream_send(const std::string& text, const std::string& voice, float speed,
                          bool raw_stress, VbMode vb_mode, SendFn&& send_chunk,
-                         Timings* tm = nullptr) {
+                         Timings* tm = nullptr, std::atomic<bool>* cancel = nullptr,
+                         const ProgressFn& progress = nullptr, bool* cancelled = nullptr) {
+    auto stopped = [&]() { return cancel && cancel->load(std::memory_order_relaxed); };
     auto t0 = Clock::now();
+    if (progress) progress("verbalize", 0, 0);
     std::string t = apply_verbalize(vb_mode, text);
     if (tm) tm->vb_ms = ms_since(t0);
     double duration = 0.0;
     auto t_phon = Clock::now();
+    if (progress) progress("phonemize", 0, 0);
     auto parts = g_engine.phonemize(t, raw_stress);
     if (tm) { tm->phon_ms = ms_since(t_phon); tm->parts = (int)parts.size(); }
+    const int total = (int)parts.size();
     double ort = 0.0;
     bool first = true;
-    for (const auto& p : parts) {
+    bool stopped_flag = false;
+    if (progress) progress("synth", 0, total);
+    for (int i = 0; i < total; ++i) {
+        if (stopped()) { stopped_flag = true; break; }
         auto t_ort = Clock::now();
-        auto pcm = g_engine.synth_part_pcm(p, voice, speed);
+        auto pcm = g_engine.synth_part_pcm(parts[i], voice, speed);
         ort += ms_since(t_ort);
         duration += (double)pcm.size() / holos::kSampleRate;
         if (first) {
             if (tm) tm->ttfb_ms = ms_since(t0);
             first = false;
         }
-        if (!send_chunk(pcm.data(), pcm.size())) break;
+        if (!send_chunk(pcm.data(), pcm.size())) { stopped_flag = true; break; }
+        if (progress) progress("synth", i + 1, total);
     }
     if (tm) { tm->ort_ms = ort; tm->total_ms = ms_since(t0); }
+    if (cancelled) *cancelled = stopped_flag;
     return duration;
 }
 
@@ -588,12 +606,45 @@ void handle_voices_delete(const std::string& raw_name,
 } // namespace
 
 // WS /api/ws/synthesize — потоковий синтез: JSON-конфіг -> бінарні PCM16 -> фінальний JSON.
+// Між чанками надсилаються текстові кадри {"progress":{phase,current,total}}.
+// Клієнт може надіслати {"cancel":true} або закрити з'єднання — синтез зупиняється
+// перед наступною частиною (grain = 1 речення); фінальний JSON містить "cancelled".
+namespace {
+std::mutex g_ws_cancel_mu;
+std::unordered_map<const drogon::WebSocketConnection*, std::shared_ptr<std::atomic<bool>>>
+    g_ws_cancel;
+
+std::shared_ptr<std::atomic<bool>> ws_cancel_slot(const drogon::WebSocketConnection* conn) {
+    std::lock_guard<std::mutex> lk(g_ws_cancel_mu);
+    auto it = g_ws_cancel.find(conn);
+    if (it != g_ws_cancel.end()) return it->second;
+    auto slot = std::make_shared<std::atomic<bool>>(false);
+    g_ws_cancel.emplace(conn, slot);
+    return slot;
+}
+
+void ws_cancel_release(const drogon::WebSocketConnection* conn) {
+    std::shared_ptr<std::atomic<bool>> slot;
+    {
+        std::lock_guard<std::mutex> lk(g_ws_cancel_mu);
+        auto it = g_ws_cancel.find(conn);
+        if (it == g_ws_cancel.end()) return;
+        slot = it->second;
+        g_ws_cancel.erase(it);
+    }
+    slot->store(true); // якщо синтез ще триває — зупинити
+}
+
+} // namespace
+
 class WSSynthesize : public drogon::WebSocketController<WSSynthesize> {
 public:
     void handleNewConnection(const drogon::HttpRequestPtr&,
                              const drogon::WebSocketConnectionPtr&) override {}
 
-    void handleConnectionClosed(const drogon::WebSocketConnectionPtr&) override {}
+    void handleConnectionClosed(const drogon::WebSocketConnectionPtr& conn) override {
+        ws_cancel_release(conn.get());
+    }
 
     void handleNewMessage(const drogon::WebSocketConnectionPtr& conn,
                           std::string&& message,
@@ -611,6 +662,13 @@ public:
             return;
         }
 
+        // {"cancel":true} під час активного синтезу — зупинка.
+        if (cfg.isMember("cancel") && cfg["cancel"].asBool()) {
+            auto slot = ws_cancel_slot(conn.get());
+            slot->store(true);
+            return;
+        }
+
         std::string text, voice, err;
         float speed = 1.0f;
         bool raw_stress = false;
@@ -624,9 +682,13 @@ public:
             return;
         }
 
+        auto cancel = ws_cancel_slot(conn.get());
+        cancel->store(false);
+
         // Синтез у detached thread, щоб не блокувати event loop.
-        std::thread([conn, text, voice, speed, raw_stress, vb_mode]() {
+        std::thread([conn, cancel, text, voice, speed, raw_stress, vb_mode]() {
             Timings tm;
+            bool cancelled = false;
             try {
                 double duration = synth_stream_send(
                     text, voice, speed, raw_stress, vb_mode,
@@ -635,9 +697,20 @@ public:
                         conn->send(bytes, drogon::WebSocketMessageType::Binary);
                         return true;
                     },
-                    &tm);
+                    &tm, cancel.get(),
+                    [&conn](const std::string& phase, int cur, int total) {
+                        Json::Value p;
+                        p["phase"] = phase;
+                        if (phase == "synth") { p["current"] = cur; p["total"] = total; }
+                        Json::Value msg;
+                        msg["progress"] = p;
+                        conn->send(Json::writeString(Json::StreamWriterBuilder(), msg),
+                                   drogon::WebSocketMessageType::Text);
+                    },
+                    &cancelled);
                 Json::Value fin;
                 fin["done"] = true;
+                fin["cancelled"] = cancelled;
                 fin["sample_rate"] = holos::kSampleRate;
                 fin["duration_sec"] = std::round(duration * 1000.0) / 1000.0;
                 if (g_metrics) fin["timings"] = timings_json(tm);
@@ -688,6 +761,11 @@ audio{width:100%;margin-top:.75rem}
 .status{margin-top:.75rem;font-size:.85rem;color:#9aa0aa;min-height:1.2em}
 .status.err{color:#f87171}
 .status.ok{color:#4ade80}
+.prog{display:none;margin-top:.75rem}
+.prog.on{display:block}
+.prog-track{height:6px;background:#2a2f3a;border-radius:3px;overflow:hidden}
+.prog-fill{height:100%;width:0;background:#3b82f6;transition:width .15s ease}
+.prog-label{margin-top:.3rem;font-size:.8rem;color:#9aa0aa}
 .disclaimer{font-size:.78rem;color:#6b7280;line-height:1.5;border-left:3px solid #374151;padding-left:.75rem;margin-top:1.5rem}
 </style>
 </head>
@@ -727,7 +805,12 @@ audio{width:100%;margin-top:.75rem}
   </div>
   <div style="margin-top:1rem;display:flex;gap:.75rem;flex-wrap:wrap">
     <button id="synthBtn">Синтезувати</button>
+    <button id="cancelBtn" class="secondary" type="button" disabled>Скасувати</button>
     <button id="dlBtn" class="secondary" disabled>Завантажити WAV</button>
+  </div>
+  <div class="prog" id="prog">
+    <div class="prog-track"><div class="prog-fill" id="progFill"></div></div>
+    <div class="prog-label" id="progLabel"></div>
   </div>
   <div class="status" id="status"></div>
   <audio id="player" controls style="display:none"></audio>
@@ -814,10 +897,82 @@ function b64ToBlob(b64,type="audio/wav"){
   return new Blob([arr],{type});
 }
 
-$("synthBtn").onclick=async()=>{
-  const text=$("text").value.trim();
-  if(text.length<10){status("Текст закороткий (мінімум 10 символів)","err");return}
-  $("synthBtn").disabled=true;status("Синтез…");
+// WAV-заголовок (44 байти, PCM16 mono) + сирі чанки -> Blob.
+function pcmChunksToWav(chunks,sampleRate){
+  let dataLen=0;for(const c of chunks)dataLen+=c.byteLength;
+  const buf=new ArrayBuffer(44+dataLen),v=new DataView(buf);
+  const wstr=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i))};
+  wstr(0,"RIFF");v.setUint32(4,36+dataLen,true);wstr(8,"WAVE");
+  wstr(12,"fmt ");v.setUint32(16,16,true);v.setUint16(20,1,true);
+  v.setUint16(22,1,true);v.setUint32(24,sampleRate,true);
+  v.setUint32(28,sampleRate*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);
+  wstr(36,"data");v.setUint32(40,dataLen,true);
+  let off=44;for(const c of chunks){new Uint8Array(buf,off,c.byteLength).set(new Uint8Array(c));off+=c.byteLength}
+  return new Blob([buf],{type:"audio/wav"});
+}
+
+const PHASE_UA={verbalize:"Вербалізація…",phonemize:"Фонемізація…",synth:"Синтез…"};
+function setProgress(phase,current,total){
+  const box=$("prog");box.classList.add("on");
+  if(phase==="synth"&&total>0){
+    const pct=Math.round((current/total)*100);
+    $("progFill").style.width=pct+"%";
+    $("progLabel").textContent=`Синтез: ${current}/${total} частин (${pct}%)`;
+  }else{
+    $("progFill").style.width="0%";
+    $("progLabel").textContent=PHASE_UA[phase]||phase;
+  }
+}
+function hideProgress(){$("prog").classList.remove("on");$("progFill").style.width="0%";$("progLabel").textContent=""}
+
+let wsSynth=null;
+function finishSynthUI(){
+  $("synthBtn").disabled=false;$("cancelBtn").disabled=true;wsSynth=null;hideProgress();
+}
+function playPcmChunks(chunks,sampleRate){
+  lastBlob=pcmChunksToWav(chunks,sampleRate);
+  const url=URL.createObjectURL(lastBlob);
+  const p=$("player");p.src=url;p.style.display="";p.play().catch(()=>{});
+  $("dlBtn").disabled=false;
+}
+
+// Основний шлях: WS /api/ws/synthesize (бінарні PCM-чанки + прогрес + cancel).
+function synthViaWS(text){
+  const proto=location.protocol==="https:"?"wss:":"ws:";
+  const ws=new WebSocket(`${proto}//${location.host}/api/ws/synthesize`);
+  ws.binaryType="arraybuffer";
+  const chunks=[];let sampleRate=24000,finished=false;
+  wsSynth=ws;
+  ws.onopen=()=>ws.send(JSON.stringify({
+    text,voice:$("voice").value,speed:+$("speed").value,auto_verbalize:$("vbMode").value
+  }));
+  ws.onmessage=ev=>{
+    if(typeof ev.data==="string"){
+      let d;try{d=JSON.parse(ev.data)}catch{return}
+      if(d.progress){setProgress(d.progress.phase,d.progress.current|0,d.progress.total|0);return}
+      if(d.error){status(d.error,"err");finished=true;ws.close();finishSynthUI();return}
+      if(d.done){
+        finished=true;
+        if(d.cancelled){status("Скасовано","");finishSynthUI();return}
+        if(!chunks.length){status("Сервер повернув порожній аудіопотік","err");finishSynthUI();return}
+        playPcmChunks(chunks,sampleRate);
+        status(`Готово: ${d.duration_sec.toFixed(2)}с · ${$("voice").value} · 24 kHz`,"ok");
+        finishSynthUI();
+      }
+      return;
+    }
+    chunks.push(ev.data);
+  };
+  ws.onerror=()=>{};
+  ws.onclose=()=>{
+    if(finished)return;
+    status("З'єднання обірвано — пробую без стрімінгу…","");
+    synthViaHttp(text);
+  };
+}
+
+// Fallback: старий /api/synthesize (sync, без прогресу).
+async function synthViaHttp(text){
   try{
     const r=await fetch("/api/synthesize",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({text,voice:$("voice").value,speed:+$("speed").value,format:"wav",auto_verbalize:$("vbMode").value})});
@@ -829,7 +984,23 @@ $("synthBtn").onclick=async()=>{
     $("dlBtn").disabled=false;
     status(`Готово: ${d.duration_sec.toFixed(2)}с · ${d.voice} · 24 kHz`,"ok");
   }catch(e){status("Помилка: "+e,"err")}
-  finally{$("synthBtn").disabled=false}
+  finally{finishSynthUI()}
+}
+
+$("synthBtn").onclick=()=>{
+  const text=$("text").value.trim();
+  if(text.length<10){status("Текст закороткий (мінімум 10 символів)","err");return}
+  $("synthBtn").disabled=true;$("cancelBtn").disabled=false;
+  status("Синтез…","");
+  synthViaWS(text);
+};
+
+$("cancelBtn").onclick=()=>{
+  if(wsSynth&&wsSynth.readyState===WebSocket.OPEN){
+    wsSynth.send(JSON.stringify({cancel:true}));
+    $("cancelBtn").disabled=true;
+    $("progLabel").textContent="Скасування…";
+  }
 };
 
 const cstatus=(m,cls="")=>{const s=$("cloneStatus");s.textContent=m;s.className="status "+cls};
