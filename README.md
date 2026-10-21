@@ -466,8 +466,8 @@ docker/        multi-stage Dockerfile
 - **M9** ✅ ARM64: multi-arch маніфест amd64+arm64 нативними runners (без QEMU),
   runtime-смоук arm64 (healthz + синтез + enroll/delete клону) перед публікацією `latest`
 
-- **M10** ✅ портативні збірки без Docker: Linux x64 AppImage (моделі всередині) +
-  tar.gz, Windows x64 zip; tar.gz/zip довантажують моделі, AppImage працює офлайн;
+- **M10** ✅ портативні збірки без Docker: Linux x64 AppImage (Tauri GUI) +
+  tar.gz, Windows x64 NSIS/zip; усі довантажують моделі при першому запуску;
   смоук у CI перед релізом
 
 Надалі:
