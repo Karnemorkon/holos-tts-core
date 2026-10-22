@@ -149,7 +149,13 @@ fn start_server_impl(app: &AppHandle) -> Result<String, String> {
     }
     #[cfg(target_os = "windows")]
     {
-        let mut path = lib.display().to_string();
+        // ORT DLLs live next to the executables; keep lib/ as a fallback for
+        // installs created before the layout change.
+        let mut path = res.display().to_string();
+        if lib.is_dir() {
+            path.push(';');
+            path.push_str(&lib.display().to_string());
+        }
         if let Ok(old) = std::env::var("PATH") {
             if !old.is_empty() {
                 path.push(';');

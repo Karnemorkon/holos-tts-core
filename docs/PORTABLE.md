@@ -58,12 +58,32 @@ cd holos-tts-core
 
 Потрібен Visual C++ Redistributable 2015–2022.
 
+### Інсталятор
+
+```powershell
+.\holos-tts-core-0.7.1-windows-x64-setup.exe
+```
+
+Інсталятор ставить застосунок у каталог користувача, створює ярлики та одразу
+запускає GUI. DLL ONNX Runtime лежать **поруч із** `HolosTTS.exe` і
+`holos-server.exe`, тому старі `onnxruntime.dll` із `PATH` або робочого каталогу
+не підхоплюються.
+
+### Портативний ZIP
+
 ```powershell
 Expand-Archive holos-tts-core-0.7.1-windows-x64.zip -DestinationPath .
 cd holos-tts-core
 powershell -ExecutionPolicy Bypass -File download-models.ps1
 holos-tts.bat
 ```
+
+### Faugus / Wine (експериментально)
+
+Windows-збірку можна запускати через Faugus (Flatpak) або інший Proton/Wine.
+Якщо після оновлення лишається помилка `API version [31] ... 1.17.1`, створіть
+чистий префікс або перевірте `drive_c` на застарілий `onnxruntime.dll`: новий
+setup кладе ORT 1.31 поруч з exe, і саме він має завантажуватися.
 
 ## Мережа
 
@@ -81,3 +101,5 @@ holos-tts.bat
 | Моделі не завантажуються | кнопка «Повторити», перевірити мережу та доступ до HF, логи |
 | Порт зайнятий | задати інший `HOLOS_PORT` |
 | Немає звуку | перевірити PipeWire/PulseAudio і вибраний вихід |
+| `The requested API version [31] ... 1.17.1` (Windows) | перевстановити setup від 2026-10-22; видалити старий каталог інсталяції; переконатися, що `onnxruntime.dll` лежить поруч із `holos-server.exe` |
+| Windows-збірка у Faugus/Wine не бачить ORT 1.31 | створити чистий префікс або прибрати старий `onnxruntime.dll` із `drive_c`; DLL уже лежать поруч з exe |
