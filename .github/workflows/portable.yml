@@ -622,6 +622,7 @@ jobs:
 
           $version = & "dist\holos-tts-core\bin\holos-cli.exe" version
           if (-not $version) { throw "version missing" }
+          $python = (Get-Command python -ErrorAction Stop).Source
           $env:HOLOS_MODELS_DIR = "$env:GITHUB_WORKSPACE\.model-cache"
           $env:HOLOS_VERBALIZER_DIR = "$env:HOLOS_MODELS_DIR\verbalizer\gemma-int8"
           $env:HOLOS_VOICE_ENCODER = "$env:HOLOS_MODELS_DIR\voice_encoder.onnx"
@@ -635,7 +636,7 @@ jobs:
           $proc = Start-Process -FilePath $server.FullName -WorkingDirectory $hostile -PassThru -NoNewWindow `
             -RedirectStandardOutput $outLog -RedirectStandardError $errLog
           try {
-            python scripts/smoke_api.py http://127.0.0.1:8004 $version
+            & $python scripts/smoke_api.py http://127.0.0.1:8004 $version
             if ($LASTEXITCODE -ne 0) { throw "smoke failed ($LASTEXITCODE)" }
           } catch {
             Get-Content $outLog, $errLog -Tail 100 -ErrorAction SilentlyContinue
