@@ -382,6 +382,18 @@ jobs:
         run: |
           packaging\windows\make-bundle.ps1 -Prefix "$PWD\dist\holos-tts-core" -OrtBin "C:\ort\lib"
 
+      - name: Verify ONNX Runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $dll = "dist\holos-tts-core\bin\onnxruntime.dll"
+          if (-not (Test-Path $dll)) { throw "onnxruntime.dll missing: $dll" }
+          $version = (Get-Item $dll).VersionInfo.FileVersion
+          Write-Host "onnxruntime: $version"
+          if (-not $version.StartsWith($env:ORT_VERSION)) {
+            throw "unexpected ONNX Runtime: $version (want $env:ORT_VERSION)"
+          }
+
       - name: Cache models
         uses: actions/cache@v4
         with:
@@ -518,6 +530,18 @@ jobs:
             desktop\tauri\src-tauri\binaries\holos-server-x86_64-pc-windows-msvc.exe
           Copy-Item dist\holos-tts-core\bin\*.dll desktop\tauri\src-tauri\resources\lib\
 
+      - name: Verify staged ONNX Runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $dll = "desktop\tauri\src-tauri\resources\lib\onnxruntime.dll"
+          if (-not (Test-Path $dll)) { throw "onnxruntime.dll not staged: $dll" }
+          $version = (Get-Item $dll).VersionInfo.FileVersion
+          Write-Host "staged onnxruntime: $version"
+          if (-not $version.StartsWith($env:ORT_VERSION)) {
+            throw "unexpected ONNX Runtime: $version (want $env:ORT_VERSION)"
+          }
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -532,10 +556,94 @@ jobs:
         shell: pwsh
         run: npm install
 
+      - name: Cache models
+        uses: actions/cache@v4
+        with:
+          path: .model-cache
+          key: holos-models-v1-${{ runner.os }}
+
+      - name: Download models
+        shell: pwsh
+        run: |
+          $env:HOLOS_MODELS_DIR = "$env:GITHUB_WORKSPACE\.model-cache"
+          packaging\windows\download-models.ps1
+
       - name: Build NSIS installer
         working-directory: desktop/tauri
         shell: pwsh
         run: npx tauri build
+
+      - name: Verify installer layout and runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installer = Get-ChildItem desktop\tauri\src-tauri\target -Recurse -Filter '*-setup.exe' |
+            Select-Object -First 1
+          if (-not $installer) { throw "NSIS installer not found" }
+
+          $sevenZip = "C:\Program Files\7-Zip\7z.exe"
+          if (-not (Test-Path $sevenZip)) {
+            $sevenZip = (Get-Command 7z -ErrorAction Stop).Source
+          }
+          $extract = Join-Path $env:RUNNER_TEMP "holos-installed"
+          Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
+          & $sevenZip x $installer.FullName "-o$extract" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7z extraction failed ($LASTEXITCODE)" }
+
+          $server = Get-ChildItem $extract -Recurse -Filter 'holos-server.exe' |
+            Select-Object -First 1
+          if (-not $server) { throw "holos-server.exe not found inside installer" }
+          $serverRoot = Split-Path -Parent $server.FullName
+          $ort = Join-Path $serverRoot "onnxruntime.dll"
+          if (-not (Test-Path $ort)) {
+            throw "onnxruntime.dll is not next to holos-server.exe in the installer"
+          }
+          $ortVersion = (Get-Item $ort).VersionInfo.FileVersion
+          Write-Host "installed onnxruntime: $ortVersion"
+          if (-not $ortVersion.StartsWith($env:ORT_VERSION)) {
+            throw "unexpected ONNX Runtime in installer: $ortVersion (want $env:ORT_VERSION)"
+          }
+
+          # Reproduce the reported setup failure: an old ORT in the working
+          # directory must not win over the DLL shipped next to the executable.
+          $hostile = Join-Path $env:RUNNER_TEMP "holos-hostile-cwd"
+          Remove-Item $hostile -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $hostile | Out-Null
+          $oldOrt = Join-Path $env:RUNNER_TEMP "onnxruntime-1.17.1"
+          Remove-Item $oldOrt -Recurse -Force -ErrorAction SilentlyContinue
+          Invoke-WebRequest -UseBasicParsing `
+            -Uri "https://github.com/microsoft/onnxruntime/releases/download/v1.17.1/onnxruntime-win-x64-1.17.1.zip" `
+            -OutFile "$env:RUNNER_TEMP\onnxruntime-1.17.1.zip"
+          Expand-Archive "$env:RUNNER_TEMP\onnxruntime-1.17.1.zip" -DestinationPath $oldOrt -Force
+          $oldDll = Get-ChildItem $oldOrt -Recurse -Filter 'onnxruntime.dll' |
+            Select-Object -First 1
+          if (-not $oldDll) { throw "ORT 1.17.1 dll not found" }
+          Copy-Item $oldDll.FullName (Join-Path $hostile "onnxruntime.dll")
+
+          $version = & "dist\holos-tts-core\bin\holos-cli.exe" version
+          if (-not $version) { throw "version missing" }
+          $python = (Get-Command python -ErrorAction Stop).Source
+          $env:HOLOS_MODELS_DIR = "$env:GITHUB_WORKSPACE\.model-cache"
+          $env:HOLOS_VERBALIZER_DIR = "$env:HOLOS_MODELS_DIR\verbalizer\gemma-int8"
+          $env:HOLOS_VOICE_ENCODER = "$env:HOLOS_MODELS_DIR\voice_encoder.onnx"
+          $env:HOLOS_SPEAKERS_DIR = "$env:GITHUB_WORKSPACE\.speakers"
+          $env:HOLOS_HOST = "127.0.0.1"
+          $env:HOLOS_PORT = "8004"
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+
+          $outLog = Join-Path $env:RUNNER_TEMP "holos-installed.out"
+          $errLog = Join-Path $env:RUNNER_TEMP "holos-installed.err"
+          $proc = Start-Process -FilePath $server.FullName -WorkingDirectory $hostile -PassThru -NoNewWindow `
+            -RedirectStandardOutput $outLog -RedirectStandardError $errLog
+          try {
+            & $python scripts/smoke_api.py http://127.0.0.1:8004 $version
+            if ($LASTEXITCODE -ne 0) { throw "smoke failed ($LASTEXITCODE)" }
+          } catch {
+            Get-Content $outLog, $errLog -Tail 100 -ErrorAction SilentlyContinue
+            throw
+          } finally {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Rename installer
         shell: pwsh
