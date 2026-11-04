@@ -569,6 +569,87 @@ void handle_synthesize(const HttpRequestPtr& req,
     }
 }
 
+// /api/synthesize_dialogue — мульти-спікерний синтез.
+// Вхід: {segments: [{text, voice, speed?, raw_stress?, auto_verbalize?}, ...], format: "wav"}
+// Вивід: {audio_base64, duration_sec, sample_rate, segments: [{voice, duration_sec, text, verbalized_text}, ...]}
+void handle_synthesize_dialogue(const HttpRequestPtr& req,
+                                std::function<void(const HttpResponsePtr&)>&& callback) {
+    const auto& body = req->getJsonObject();
+    if (!body) { callback(json_error(400, "очікується JSON-тіло")); return; }
+    const Json::Value& j = *body;
+
+    if (!j.isMember("segments") || !j["segments"].isArray() || j["segments"].size() == 0) {
+        callback(json_error(400, "очікується масив segments з принаймні одним елементом"));
+        return;
+    }
+    std::string format = j.get("format", "wav").asString();
+    if (format != "wav") { callback(json_error(400, "format: у C++ підтримується лише wav")); return; }
+
+    const Json::Value& segs = j["segments"];
+    std::vector<std::vector<int16_t>> all_pcm;
+    Json::Value seg_results(Json::arrayValue);
+    double total_audio_sec = 0.0;
+
+    for (int i = 0; i < (int)segs.size(); ++i) {
+        const Json::Value& s = segs[i];
+        std::string text = s.get("text", "").asString();
+        if (text.empty()) { callback(json_error(400, "segment " + std::to_string(i) + ": text is empty")); return; }
+        std::string voice_name = s.get("voice", "").asString();
+        float speed = (float)s.get("speed", 1.0).asDouble();
+        bool raw_stress = s.get("raw_stress", false).asBool();
+        VbMode vb_mode = parse_vb_mode(s);
+
+        if (!valid_speed(speed)) {
+            callback(json_error(400, "segment " + std::to_string(i) + ": speed мусить бути в діапазоні 0.25-4.0"));
+            return;
+        }
+        std::string voice = g_engine.pick_voice(voice_name);
+        if (voice.empty()) {
+            callback(json_error(400, "segment " + std::to_string(i) + ": Невідомий голос: " + voice_name));
+            return;
+        }
+
+        std::string vtext;
+        Timings tm;
+        std::vector<int16_t> pcm = g_engine.synthesize_pcm(text, voice, speed, raw_stress, vb_mode, &tm, &vtext);
+        double seg_sec = (double)pcm.size() / holos::kSampleRate;
+        total_audio_sec += seg_sec;
+
+        all_pcm.push_back(std::move(pcm));
+
+        Json::Value sr;
+        sr["index"] = i;
+        sr["voice"] = voice;
+        sr["speed"] = speed;
+        sr["text"] = text;
+        sr["verbalized_text"] = vtext;
+        sr["duration_sec"] = seg_sec;
+        sr["raw_stress"] = raw_stress;
+        sr["auto_verbalize"] = (vb_mode == VbMode::Neural ? "neural" : (vb_mode == VbMode::Rule ? "rule" : "off"));
+        seg_results.append(sr);
+    }
+
+    // Concatenate all PCM
+    size_t total_samples = 0;
+    for (const auto& p : all_pcm) total_samples += p.size();
+    std::vector<int16_t> concat_pcm;
+    concat_pcm.reserve(total_samples);
+    for (const auto& p : all_pcm) concat_pcm.insert(concat_pcm.end(), p.begin(), p.end());
+
+    auto bytes = holos::wav_bytes(concat_pcm, holos::kSampleRate);
+    std::string b64 = drogon::utils::base64Encode(
+        reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size());
+
+    Json::Value resp;
+    resp["format"] = format;
+    resp["sample_rate"] = holos::kSampleRate;
+    resp["duration_sec"] = total_audio_sec;
+    resp["audio_base64"] = b64;
+    resp["segments"] = seg_results;
+    if (g_metrics) resp["timings"] = timings_json(Timings{}); // per-segment timings not accumulated
+    callback(HttpResponse::newHttpJsonResponse(resp));
+}
+
 // /api/voices (POST) — зберегти клонований голос: {name, audio_base64(WAV)}.
 // Аудіо декодується (будь-яка частота/формат WAV) -> 24k -> voice_encoder -> 256.
 void handle_voices_save(const HttpRequestPtr& req,
@@ -1269,6 +1350,7 @@ int main() {
             {Delete})
         .registerHandler("/v1/audio/speech", &handle_openai_speech, {Post})
         .registerHandler("/api/synthesize", &handle_synthesize, {Post})
+        .registerHandler("/api/synthesize_dialogue", &handle_synthesize_dialogue, {Post})
         .registerHandler("/api/verbalize",
             [](const HttpRequestPtr& req, std::function<void(const HttpResponsePtr&)>&& cb) {
                 // Вербалізація цифр/дат/часу: mode=neural|rule (типово neural).
