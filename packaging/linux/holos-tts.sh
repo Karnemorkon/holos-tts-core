@@ -13,7 +13,14 @@ export HOLOS_HOST="${HOLOS_HOST:-127.0.0.1}"
 export HOLOS_PORT="${HOLOS_PORT:-8004}"
 export LD_LIBRARY_PATH="$DIR/lib:${LD_LIBRARY_PATH:-}"
 
-if [ ! -f "$HOLOS_MODELS_DIR/holos_cpu_int8.onnx" ]; then
+# Багатоетапний бандл holos-onnx (типовий формат) або legacy-граф (старі набори).
+if [ -f "$HOLOS_MODELS_DIR/holos-onnx/holos_onnx.json" ]; then
+    export HOLOS_ONNX="${HOLOS_ONNX:-$HOLOS_MODELS_DIR/holos-onnx}"
+    export HOLOS_MODEL_FORMAT="${HOLOS_MODEL_FORMAT:-bundle}"
+elif [ -f "$HOLOS_MODELS_DIR/holos_cpu_int8.onnx" ]; then
+    export HOLOS_ONNX="${HOLOS_ONNX:-$HOLOS_MODELS_DIR/holos_cpu_int8.onnx}"
+    export HOLOS_MODEL_FORMAT="${HOLOS_MODEL_FORMAT:-legacy}"
+else
     echo "Моделі не знайдено у $HOLOS_MODELS_DIR" >&2
     echo "Запустіть один раз: $DIR/download-models.sh" >&2
     exit 1

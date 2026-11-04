@@ -10,14 +10,21 @@ const HF_BASE: &str = "https://huggingface.co/Morkon/holos-native-models/resolve
 const MAX_ATTEMPTS: u32 = 3;
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 
-// (HF path, relative dest) — дзеркало packaging/linux/download-models.sh
+// (HF path, relative dest) — дзеркало packaging/linux/download-models.sh.
+// Типовий формат — багатоетапний бандл holos-onnx (encoder/prosody/decoder +
+// streaming); legacy-граф holos_cpu_int8.onnx більше не завантажується, але
+// старі інсталяції з ним продовжують працювати (HOLOS_MODEL_FORMAT=legacy).
 const FILES: &[(&str, &str)] = &[
+    ("holos-onnx-int8/holos_onnx.json", "holos-onnx/holos_onnx.json"),
+    ("holos-onnx-int8/encoder.onnx", "holos-onnx/encoder.onnx"),
+    ("holos-onnx-int8/prosody.onnx", "holos-onnx/prosody.onnx"),
+    ("holos-onnx-int8/decoder.onnx", "holos-onnx/decoder.onnx"),
+    ("holos-onnx-int8/decoder_window.onnx", "holos-onnx/decoder_window.onnx"),
+    ("holos-onnx-int8/source.onnx", "holos-onnx/source.onnx"),
+    ("holos-onnx-int8/voices.npz", "holos-onnx/voices.npz"),
     ("stress/stress.trie", "stress.trie"),
-    ("tts/vocab.json", "vocab.json"),
-    ("tts/voices.json", "voices.json"),
-    ("tts/holos_cpu_int8.onnx", "holos_cpu_int8.onnx"),
-    ("tts/voice_encoder.onnx", "voice_encoder.onnx"),
     ("accentor/accentor-lite.onnx", "accentor-lite.onnx"),
+    ("tts/voice_encoder.onnx", "voice_encoder.onnx"),
     ("verbalizer/gemma-int8/model.onnx", "verbalizer/gemma-int8/model.onnx"),
     ("verbalizer/gemma-int8/tokenizer.model", "verbalizer/gemma-int8/tokenizer.model"),
     ("verbalizer/gemma-int8/config.json", "verbalizer/gemma-int8/config.json"),
@@ -43,6 +50,16 @@ pub fn models_dir() -> PathBuf {
         };
         base.join("holos-tts-core").join("models")
     }
+}
+
+/// Каталог багатоетапного бандла (`HOLOS_ONNX` для sidecar).
+pub fn bundle_dir() -> PathBuf {
+    models_dir().join("holos-onnx")
+}
+
+/// Маніфест бандла: його наявність = моделі нового формату завантажені.
+pub fn bundle_manifest() -> PathBuf {
+    bundle_dir().join("holos_onnx.json")
 }
 
 fn file_size(p: &Path) -> u64 {

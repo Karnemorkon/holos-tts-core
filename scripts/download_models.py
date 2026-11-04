@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """Download HolosTTS native models from HF repo Morkon/holos-native-models.
 
-Lays files out to match holos-server defaults (HOLOS_MODELS_DIR layout):
+Default format is the multi-stage `holos-onnx` bundle:
+  models/holos-onnx/{holos_onnx.json,encoder,prosody,decoder,decoder_window,source,voices.npz}
   models/stress.trie
-  models/vocab.json
-  models/voices.json
-  models/holos_cpu_int8.onnx
   models/accentor-lite.onnx
   models/voice_encoder.onnx
   models/verbalizer/gemma-int8/...
+
+Legacy single-graph layout (`--format legacy`):
+  models/holos_cpu_int8.onnx
+  models/vocab.json
+  models/voices.json
+  + stress.trie / accentor-lite.onnx / voice_encoder.onnx / verbalizer/...
 
 Only files missing locally are fetched (adding a new model to the repo does
 not re-download the rest); --force re-downloads everything.
@@ -79,7 +83,7 @@ def main() -> int:
                     help="re-download even if models are already present")
     ap.add_argument("--with-m2m100", action="store_true",
                     help="also download legacy M2M100 verbalizer (verbalizer/onnx-int8)")
-    ap.add_argument("--format", choices=["legacy", "bundle"], default="legacy",
+    ap.add_argument("--format", choices=["legacy", "bundle"], default="bundle",
                     help="model format to download: legacy (single ONNX) or bundle (holos-onnx)")
     args = ap.parse_args()
 

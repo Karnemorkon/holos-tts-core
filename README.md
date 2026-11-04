@@ -14,7 +14,8 @@
 > multi-arch `linux/amd64` + `linux/arm64`. Current release: **0.7.1**.
 
 Нативне C++ ядро українського синтезу мовлення: один бінарник + ONNX Runtime, без Python
-у рантаймі. Перший запуск довантажує моделі (~0.6 ГБ) у named volume.
+у рантаймі. Перший запуск довантажує моделі (~0.8 ГБ, багатоетапний бандл
+`holos-onnx`) у named volume.
 
 <details>
 <summary>Відмова від відповідальності / Disclaimer</summary>
@@ -85,7 +86,7 @@ multi-arch **linux/amd64 + linux/arm64**. Публікується лише з �
 | Linux x64 | `holos-tts-core-<версія>-linux-x64.tar.gz` | glibc ≥ 2.35 (Ubuntu 22.04+) |
 | Windows x64 | `holos-tts-core-<версія>-windows-x64-setup.exe` / `-windows-x64.zip` | Windows 10/11 + VC++ 2015–2022 |
 
-Усі збірки довантажують моделі (~0.6 ГБ) при першому запуску. Вимоги, DE-нюанси
+Усі збірки довантажують моделі (~0.8 ГБ, бандл `holos-onnx`) при першому запуску. Вимоги, DE-нюанси
 (GNOME/XFCE/LXQt/тайли), Wayland+NVIDIA і логи — [docs/PORTABLE.md](docs/PORTABLE.md).
 
 ## Моделі
@@ -122,7 +123,7 @@ python3 scripts/download_models.py --out models
 ## Ліцензія та подяки
 
 - **Цей репозиторій** (ядро, сервер, UI, оптимізації): [MIT](LICENSE).
-- **Нейромережа HolosTTS** (ваги `holos_cpu_int8.onnx`, `voices.json`) належить автору
+- **Нейромережа HolosTTS** (ваги бандла `holos-onnx`: `encoder/prosody/decoder`.onnx) належить автору
   **[patriotyk](https://github.com/patriotyk)** і розповсюджується за MIT:
   [github.com/patriotyk/HolosTTS](https://github.com/patriotyk/HolosTTS) ·
   [huggingface.co/patriotyk/HolosTTS](https://huggingface.co/patriotyk/HolosTTS).

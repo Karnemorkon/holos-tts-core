@@ -17,11 +17,15 @@ for exe in holos-server holos-cli; do
 done
 
 required=(
-    holos_cpu_int8.onnx
+    holos-onnx/holos_onnx.json
+    holos-onnx/encoder.onnx
+    holos-onnx/prosody.onnx
+    holos-onnx/decoder.onnx
+    holos-onnx/decoder_window.onnx
+    holos-onnx/source.onnx
+    holos-onnx/voices.npz
     voice_encoder.onnx
     stress.trie
-    vocab.json
-    voices.json
     accentor-lite.onnx
     verbalizer/gemma-int8/model.onnx
     verbalizer/gemma-int8/tokenizer.model

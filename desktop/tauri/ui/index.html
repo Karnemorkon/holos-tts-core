@@ -42,7 +42,7 @@ async function boot(){
     hint.textContent=s.models_dir;
     const missing=s.files.filter(f=>!f.have);
     if(missing.length){
-      st.textContent=`Потрібно завантажити ${missing.length} файлів моделей (~0.6 ГБ)`;
+      st.textContent=`Потрібно завантажити ${missing.length} файлів моделей (~0.8 ГБ)`;
       btn.textContent="Завантажити моделі";
       btn.disabled=false;
       btn.style.display="";

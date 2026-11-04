@@ -11,3 +11,6 @@ src-tauri/resources/lib/*
 # Mobile icon sets are not used
 src-tauri/icons/android/
 src-tauri/icons/ios/
+
+# Tauri codegen (schemas, ACL manifests)
+src-tauri/gen/

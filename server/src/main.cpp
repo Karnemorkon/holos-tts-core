@@ -2,6 +2,8 @@
 #include <drogon/drogon.h>
 #include <drogon/WebSocketController.h>
 
+#include <filesystem>
+
 #include "core/audio.h"
 #include "core/audio_io.h"
 #include "core/custom_voices.h"
@@ -47,6 +49,25 @@ std::string env(const char* k, const std::string& def) {
 int env_int(const char* k, int def) {
     const char* v = std::getenv(k);
     return v && *v ? std::atoi(v) : def;
+}
+
+// HOLOS_MODEL_FORMAT: auto (дефолт) | legacy | bundle.
+holos::SynthesizerMode parse_model_format(const std::string& fmt) {
+    if (fmt == "legacy") return holos::SynthesizerMode::Legacy;
+    if (fmt == "bundle") return holos::SynthesizerMode::Bundle;
+    return holos::SynthesizerMode::Auto;
+}
+
+// HOLOS_ONNX: явний шлях має приоритет; інакше auto — бандл holos-onnx
+// (якщо є маніфест), інакше legacy-граф у каталозі моделей.
+std::string resolve_onnx(const std::string& models, const std::string& fmt) {
+    const std::string legacy = models + "/holos_cpu_int8.onnx";
+    const std::string bundle = models + "/holos-onnx";
+    if (const char* v = std::getenv("HOLOS_ONNX"); v && *v) return v;
+    if (fmt == "legacy") return legacy;
+    if (fmt == "bundle") return bundle;
+    std::error_code ec;
+    return std::filesystem::is_regular_file(bundle + "/holos_onnx.json", ec) ? bundle : legacy;
 }
 
 // Інструментування латентності (TTFB/RTF). Типово ВИМКНЕНО (прод-режим):
@@ -169,9 +190,10 @@ struct Engine {
     void load(const std::string& trie, const std::string& vocab,
               const std::string& voices_json, const std::string& onnx,
               const std::string& accentor, const std::string& voice_encoder,
-              const std::string& speakers_dir, int threads) {
+              const std::string& speakers_dir, int threads,
+              holos::SynthesizerMode mode = holos::SynthesizerMode::Auto) {
         phonemizer = std::make_unique<holos::Phonemizer>(trie, accentor);
-        synth = std::make_unique<holos::Synthesizer>(onnx, threads);
+        synth = std::make_unique<holos::Synthesizer>(onnx, threads, mode);
         // Бандл holos-onnx несе власні голоси (voices.npz) і фонемний словник
         // (vocab у маніфесті). Legacy voices.json/vocab.json з ним несумісні:
         // ембеддінги з іншого voice-енкодера дають іншу вимову й темп.
@@ -1081,7 +1103,9 @@ int main() {
     std::string trie = env("HOLOS_TRIE", models + "/stress.trie");
     std::string vocab = env("HOLOS_VOCAB", models + "/vocab.json");
     std::string voices_json = env("HOLOS_VOICES", models + "/voices.json");
-    std::string onnx = env("HOLOS_ONNX", models + "/holos_cpu_int8.onnx");
+    const std::string model_format = env("HOLOS_MODEL_FORMAT", "auto");
+    const holos::SynthesizerMode synth_mode = parse_model_format(model_format);
+    std::string onnx = resolve_onnx(models, model_format);
     std::string accentor = env("HOLOS_ACCENTOR", models + "/accentor-lite.onnx");
     std::string voice_encoder = env("HOLOS_VOICE_ENCODER", models + "/voice_encoder.onnx");
     std::string speakers_dir = env("HOLOS_SPEAKERS_DIR", "/app/speakers");
@@ -1090,8 +1114,10 @@ int main() {
     LOG_INFO << "loading models: trie=" << trie << " vocab=" << vocab
              << " voices=" << voices_json << " onnx=" << onnx
              << " accentor=" << accentor;
+    LOG_INFO << "model format: " << model_format
+             << (synth_mode == holos::SynthesizerMode::Auto ? " (auto-detect)" : "");
     g_engine.load(trie, vocab, voices_json, onnx, accentor, voice_encoder, speakers_dir,
-                  threads);
+                  threads, synth_mode);
     LOG_INFO << "models loaded; voices=" << g_engine.voice_names.size()
              << " vocab=" << g_engine.tokenizer.vocab_size();
     LOG_INFO << "cloning: " << (g_engine.cloning_ready() ? "ready" : "disabled")

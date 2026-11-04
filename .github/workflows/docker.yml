@@ -110,14 +110,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: models
-          key: holos-models-v1
+          key: holos-models-v2-bundle
 
       - name: Download models (only if cache miss)
         run: |
-          if [ ! -f models/holos_cpu_int8.onnx ]; then
+          if [ ! -f models/holos-onnx/holos_onnx.json ]; then
             python3 -m venv .venv
             .venv/bin/pip install -q huggingface_hub
-            .venv/bin/python scripts/download_models.py --out models
+            .venv/bin/python scripts/download_models.py --out models --format bundle
           fi
 
       - name: Run container

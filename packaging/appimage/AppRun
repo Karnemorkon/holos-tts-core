@@ -15,6 +15,14 @@ export HOLOS_VOICE_ENCODER="${HOLOS_VOICE_ENCODER-$HOLOS_MODELS_DIR/voice_encode
 export HOLOS_SPEAKERS_DIR="${HOLOS_SPEAKERS_DIR:-$DATA_DIR/speakers}"
 export HOLOS_HOST="${HOLOS_HOST:-127.0.0.1}"
 export HOLOS_PORT="${HOLOS_PORT:-8004}"
+# Багатоетапний бандл holos-onnx (типовий формат) або legacy-граф.
+if [ -f "$HOLOS_MODELS_DIR/holos-onnx/holos_onnx.json" ]; then
+    export HOLOS_ONNX="${HOLOS_ONNX:-$HOLOS_MODELS_DIR/holos-onnx}"
+    export HOLOS_MODEL_FORMAT="${HOLOS_MODEL_FORMAT:-bundle}"
+elif [ -f "$HOLOS_MODELS_DIR/holos_cpu_int8.onnx" ]; then
+    export HOLOS_ONNX="${HOLOS_ONNX:-$HOLOS_MODELS_DIR/holos_cpu_int8.onnx}"
+    export HOLOS_MODEL_FORMAT="${HOLOS_MODEL_FORMAT:-legacy}"
+fi
 HOST_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
 export LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
@@ -187,6 +195,8 @@ HolosTTS AppImage
   HOLOS_PORT            порт (типово 8004)
   HOLOS_HOST            адреса (типово 127.0.0.1; 0.0.0.0 — LAN)
   HOLOS_OPEN_BROWSER=0  не відкривати браузер
+  HOLOS_ONNX            каталог бандла holos-onnx або legacy .onnx
+  HOLOS_MODEL_FORMAT    auto|bundle|legacy (типово auto)
   HOLOS_VERBALIZER_DIR=""  rule-only (без neural)
   HOLOS_SPEAKERS_DIR    голоси (типово \$XDG_DATA_HOME/holos-tts-core/speakers)
 
@@ -206,7 +216,7 @@ if [ -z "${HOLOS_APPIMAGE_TERM:-}" ] && [ ! -t 0 ] && [ ! -t 1 ]; then
     exit 1
 fi
 
-if [ ! -s "$HOLOS_MODELS_DIR/holos_cpu_int8.onnx" ]; then
+if [ -z "${HOLOS_ONNX:-}" ]; then
     echo "Моделі не знайдено у $HOLOS_MODELS_DIR" >&2
     exit 1
 fi

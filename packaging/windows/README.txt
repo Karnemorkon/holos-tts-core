@@ -2,7 +2,7 @@ HolosTTS core — portable build (Windows x64, no Docker)
 =======================================================
 
 1. Extract the zip to any folder.
-2. Download models once (~0.6 GB): right-click download-models.ps1 ->
+2. Download models once (~0.8 GB, holos-onnx bundle): right-click download-models.ps1 ->
    "Run with PowerShell" (or: powershell -ExecutionPolicy Bypass -File download-models.ps1)
 3. Run holos-tts.bat
    The browser opens http://127.0.0.1:8004/ (synthesis + voice cloning UI).
@@ -14,6 +14,7 @@ Expose to LAN: set HOLOS_HOST=0.0.0.0 (no authentication — be careful).
 
 Data:
   models\    model files (override with HOLOS_MODELS_DIR)
+             models\holos-onnx\ - multi-stage bundle (default format)
   speakers\  cloned voices (*.npy)
 
 CLI: bin\holos-cli.exe

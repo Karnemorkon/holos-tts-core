@@ -134,6 +134,20 @@ fn start_server_impl(app: &AppHandle) -> Result<String, String> {
         .env("HOLOS_VOICE_ENCODER", mdir.join("voice_encoder.onnx"))
         .env("HOLOS_SPEAKERS_DIR", &sdir);
 
+    // Багатоетапний бандл holos-onnx — типовий формат. Якщо його ще немає
+    // (оновлення зі старої версії), лишаємось на legacy-графі.
+    let bundle = models::bundle_dir();
+    if models::bundle_manifest().is_file() {
+        cmd = cmd.env("HOLOS_ONNX", &bundle);
+        cmd = cmd.env("HOLOS_MODEL_FORMAT", "bundle");
+    } else {
+        let legacy = mdir.join("holos_cpu_int8.onnx");
+        if legacy.is_file() {
+            cmd = cmd.env("HOLOS_ONNX", &legacy);
+            cmd = cmd.env("HOLOS_MODEL_FORMAT", "legacy");
+        }
+    }
+
     let res = app.path().resource_dir().map_err(|e| e.to_string())?;
     let lib = res.join("lib");
     #[cfg(target_os = "linux")]
