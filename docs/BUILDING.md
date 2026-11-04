@@ -5,6 +5,10 @@
 ONNX Runtime 1.31 (prebuilt tarball), sentencepiece (apt), Drogon, marisa-trie,
 utf8proc, PCRE2, nlohmann_json, dr_wav (FetchContent).
 
+Мінімум для бандла `holos-onnx` — **ONNX Runtime ≥ 1.19**: його графи мають
+IR version 10, який ORT 1.17 ще не читає (`Unsupported model IR version: 10`).
+Legacy-граф `holos_cpu_int8.onnx` працює і на 1.17.
+
 ## CMake
 
 ```bash
