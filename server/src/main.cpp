@@ -740,17 +740,42 @@ public:
             return;
         }
 
+        // Перевірка чи це діалоговий режим
+        bool is_dialogue = cfg.isMember("dialogue") && cfg["dialogue"].asBool();
+        
         std::string text, voice, err;
         float speed = 1.0f;
         bool raw_stress = false;
         VbMode vb_mode = VbMode::Neural;
-        err = validate_synth_cfg(cfg, text, voice, speed, raw_stress, vb_mode);
-        if (!err.empty()) {
-            Json::Value e; e["error"] = err;
-            conn->send(Json::writeString(Json::StreamWriterBuilder(), e),
-                       drogon::WebSocketMessageType::Text);
-            conn->shutdown();
-            return;
+        std::vector<Json::Value> segments;
+        
+        if (cfg.isMember("dialogue") && cfg["dialogue"].asBool()) {
+            if (!cfg.isMember("segments") || !cfg["segments"].isArray() || cfg["segments"].size() == 0) {
+                Json::Value e; e["error"] = "діалог: очікується масив segments";
+                conn->send(Json::writeString(Json::StreamWriterBuilder(), e),
+                           drogon::WebSocketMessageType::Text);
+                conn->shutdown();
+                return;
+            }
+            auto& segs = cfg["segments"];
+            for (const auto& s : segs) {
+                if (!s.isMember("text") || !s.isMember("voice")) {
+                    Json::Value e; e["error"] = "segment: очікується text і voice";
+                    conn->send(Json::writeString(Json::StreamWriterBuilder(), e),
+                               drogon::WebSocketMessageType::Text);
+                    conn->shutdown();
+                    return;
+                }
+            }
+        } else {
+            err = validate_synth_cfg(cfg, text, voice, speed, raw_stress, vb_mode);
+            if (!err.empty()) {
+                Json::Value e; e["error"] = err;
+                conn->send(Json::writeString(Json::StreamWriterBuilder(), e),
+                           drogon::WebSocketMessageType::Text);
+                conn->shutdown();
+                return;
+            }
         }
 
         auto cancel = ws_cancel_slot(conn.get());

@@ -27,6 +27,8 @@ struct TextPrep {
     // strip_wrappers -> apply_stress_markup -> standardize_dashes ->
     // ensure_terminal_punct -> " - " -> ": ". Порожні частини -> порожній рядок.
     static std::string normalize_part(std::string_view part);
+    // Транслітерація англійських слів/абревіатур до українського вимови.
+    static std::string transliterate_english(std::string_view text);
 };
 
 } // namespace holos
