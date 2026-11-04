@@ -9,6 +9,7 @@
 #include <vector>
 #include <optional>
 #include <map>
+#include <functional>
 
 namespace holos {
 
@@ -34,11 +35,10 @@ public:
     std::vector<float> synthesize(const std::vector<int64_t>& phoneme_ids,
                                    const float* voice256, float speed = 1.0f) const;
     
-    template<typename F>
     bool synthesize_stream(const std::vector<int64_t>& phoneme_ids,
                            const float* voice256, float speed,
                            const StreamingConfig& cfg,
-                           F&& on_chunk) const;
+                           std::function<bool(const std::vector<float>&)> on_chunk) const;
     
     uint32_t sample_rate() const { return bundle_->sample_rate(); }
     size_t samples_per_frame() const { return bundle_->samples_per_frame(); }

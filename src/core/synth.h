@@ -7,6 +7,7 @@
 #include <functional>
 
 #include "bundle.h"
+#include "bundle_synthesizer.h"
 
 namespace holos {
 
@@ -28,11 +29,19 @@ public:
     std::vector<float> generate(const std::vector<int64_t>& phoneme_ids,
                                 const float* voice256, float speed = 1.0f) const;
 
+    BundleSynthesizer* bundle_impl() const;
+
     template<typename F>
     bool generate_stream(const std::vector<int64_t>& phoneme_ids,
                          const float* voice256, float speed,
                          const StreamingConfig& cfg,
-                         F&& on_chunk) const;
+                         F&& on_chunk) const {
+        if (this->mode() != SynthesizerMode::Bundle) return false;
+        auto* b = this->bundle_impl();
+        if (!b) return false;
+        return b->synthesize_stream(phoneme_ids, voice256, speed, cfg,
+                                    std::forward<F>(on_chunk));
+    }
 
     std::optional<uint32_t> sample_rate() const;
     std::optional<size_t> samples_per_frame() const;

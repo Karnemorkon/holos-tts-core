@@ -381,17 +381,42 @@ double synth_stream_send(const std::string& text, const std::string& voice, floa
     bool first = true;
     bool stopped_flag = false;
     if (progress) progress("synth", 0, total);
+
+    const bool use_stream =
+        (g_engine.synth->mode() == holos::SynthesizerMode::Bundle)
+        && g_engine.synth->is_streaming_supported();
+    std::vector<int16_t> pcm;
     for (int i = 0; i < total; ++i) {
         if (stopped()) { stopped_flag = true; break; }
         auto t_ort = Clock::now();
-        auto pcm = g_engine.synth_part_pcm(parts[i], voice, speed);
-        ort += ms_since(t_ort);
-        duration += (double)pcm.size() / holos::kSampleRate;
-        if (first) {
-            if (tm) tm->ttfb_ms = ms_since(t0);
-            first = false;
+        if (use_stream) {
+            const auto& voice_emb = g_engine.voice_embedding(voice);
+            auto ids = g_engine.tokenizer(parts[i]);
+            bool ok = g_engine.synth->generate_stream(
+                ids, voice_emb.data(), speed, holos::StreamingConfig{},
+                [&](const std::vector<float>& chunk) -> bool {
+                    pcm = holos::float_to_pcm16(chunk);
+                    duration += (double)pcm.size() / holos::kSampleRate;
+                    if (first) {
+                        if (tm) tm->ttfb_ms = ms_since(t0);
+                        first = false;
+                    }
+                    return send_chunk(pcm.data(), pcm.size());
+                });
+            if (!ok) { stopped_flag = true; break; }
+        } else {
+            auto pcm_chunk = g_engine.synth_part_pcm(parts[i], voice, speed);
+            duration += (double)pcm_chunk.size() / holos::kSampleRate;
+            if (first) {
+                if (tm) tm->ttfb_ms = ms_since(t0);
+                first = false;
+            }
+            if (!send_chunk(pcm_chunk.data(), pcm_chunk.size())) {
+                stopped_flag = true;
+                break;
+            }
         }
-        if (!send_chunk(pcm.data(), pcm.size())) { stopped_flag = true; break; }
+        ort += ms_since(t_ort);
         if (progress) progress("synth", i + 1, total);
     }
     if (tm) { tm->ort_ms = ort; tm->total_ms = ms_since(t0); }

@@ -513,13 +513,12 @@ std::vector<float> BundleSynthesizer::synthesize(const std::vector<int64_t>& pho
     return impl_->decode_exact(encoded);
 }
 
-template<typename F>
 bool BundleSynthesizer::synthesize_stream(const std::vector<int64_t>& phoneme_ids,
-                                           const float* voice256, float speed,
-                                           const StreamingConfig& cfg,
-                                           F&& on_chunk) const {
+                                            const float* voice256, float speed,
+                                            const StreamingConfig& cfg,
+                                            std::function<bool(const std::vector<float>&)> on_chunk) const {
     auto encoded = impl_->encode(phoneme_ids, voice256, speed);
-    return impl_->decode_streaming(encoded, cfg, std::forward<F>(on_chunk));
+    return impl_->decode_streaming(encoded, cfg, on_chunk);
 }
 
 

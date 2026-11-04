@@ -184,6 +184,8 @@ SynthesizerMode Synthesizer::mode() const { return impl_->mode; }
 
 int Synthesizer::intra_threads() const { return impl_->intra; }
 
+BundleSynthesizer* Synthesizer::bundle_impl() const { return impl_->bundle.get(); }
+
 std::vector<float> Synthesizer::generate(const std::vector<int64_t>& phoneme_ids,
                                          const float* voice256, float speed) const {
     if (impl_->mode == SynthesizerMode::Bundle) {
@@ -191,15 +193,6 @@ std::vector<float> Synthesizer::generate(const std::vector<int64_t>& phoneme_ids
     } else {
         return impl_->legacy->generate(phoneme_ids, voice256, speed);
     }
-}
-
-template<typename F>
-bool Synthesizer::generate_stream(const std::vector<int64_t>& phoneme_ids,
-                                  const float* voice256, float speed,
-                                  const StreamingConfig& cfg,
-                                  F&& on_chunk) const {
-    if (impl_->mode != SynthesizerMode::Bundle) return false;
-    return impl_->bundle->synthesize_stream(phoneme_ids, voice256, speed, cfg, std::forward<F>(on_chunk));
 }
 
 std::optional<uint32_t> Synthesizer::sample_rate() const {
@@ -241,8 +234,5 @@ bool Synthesizer::is_streaming_supported() const {
     if (impl_->mode == SynthesizerMode::Bundle) return impl_->bundle->is_streaming_supported();
     return false;
 }
-
-// Template implementations must be in header for member function templates
-// Explicit instantiations removed - templates are instantiated implicitly
 
 } // namespace holos
