@@ -8,7 +8,8 @@
 | `HOLOS_TRIE` | `$MODELS/stress.trie` | словник наголосів |
 | `HOLOS_VOCAB` | `$MODELS/vocab.json` | токенізатор |
 | `HOLOS_VOICES` | `$MODELS/voices.json` | пресети голосів |
-| `HOLOS_ONNX` | `$MODELS/holos_cpu_int8.onnx` | TTS-модель |
+| `HOLOS_ONNX` | `$MODELS/holos_cpu_int8.onnx` | TTS-модель: каталог бандла або legacy `.onnx` |
+| `HOLOS_MODEL_FORMAT` | `auto` | `auto` = бандл, якщо є `holos_onnx.json`; `bundle`/`legacy` — примусово |
 | `HOLOS_ACCENTOR` | `$MODELS/accentor-lite.onnx` | нейро-фолбек наголосу |
 | `HOLOS_VOICE_ENCODER` | `$MODELS/voice_encoder.onnx` | енкодер для клонування (немає файлу → клонування вимкнено) |
 | `HOLOS_SPEAKERS_DIR` | `/app/speakers` | каталог клонованих голосів (`*.npy`) |

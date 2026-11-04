@@ -171,9 +171,33 @@ struct Engine {
               const std::string& accentor, const std::string& voice_encoder,
               const std::string& speakers_dir, int threads) {
         phonemizer = std::make_unique<holos::Phonemizer>(trie, accentor);
-        voices = holos::Voices::load(voices_json);
-        tokenizer = holos::CharTokenizer::from_vocab_json(vocab);
         synth = std::make_unique<holos::Synthesizer>(onnx, threads);
+        // Бандл holos-onnx несе власні голоси (voices.npz) і фонемний словник
+        // (vocab у маніфесті). Legacy voices.json/vocab.json з ним несумісні:
+        // ембеддінги з іншого voice-енкодера дають іншу вимову й темп.
+        if (synth->mode() == holos::SynthesizerMode::Bundle) {
+            std::map<std::string, std::vector<float>> presets;
+            if (auto names = synth->voice_names()) {
+                for (const auto& n : *names) {
+                    if (auto v = synth->voice(n)) presets[n] = **v;
+                }
+            }
+            if (!presets.empty()) {
+                voices = holos::Voices::from_map(std::move(presets));
+            } else {
+                voices = holos::Voices::load(voices_json);
+            }
+            if (auto v = synth->vocab(); v && !v->empty()) {
+                tokenizer = holos::CharTokenizer(*v);
+            } else {
+                tokenizer = holos::CharTokenizer::from_vocab_json(vocab);
+            }
+            LOG_INFO << "bundle voices: " << voices.size()
+                     << ", vocab size: " << tokenizer.vocab_size();
+        } else {
+            voices = holos::Voices::load(voices_json);
+            tokenizer = holos::CharTokenizer::from_vocab_json(vocab);
+        }
         encoder = std::make_unique<holos::VoiceEncoder>(voice_encoder, threads);
         custom = std::make_unique<holos::CustomVoices>(speakers_dir);
         voice_names = voices.names();
@@ -1131,6 +1155,15 @@ int main() {
                 j["stress"] = "dictionary-A";
                 j["voices"] = (int)g_engine.voice_names.size();
                 j["cloning"] = g_engine.cloning_ready();
+                if (g_engine.synth->mode() == holos::SynthesizerMode::Bundle) {
+                    j["model_format"] = "bundle";
+                    if (auto sr = g_engine.synth->sample_rate()) j["sample_rate"] = (int)*sr;
+                    if (auto spf = g_engine.synth->samples_per_frame()) j["samples_per_frame"] = (int)*spf;
+                    if (auto mf = g_engine.synth->max_frames()) j["max_frames"] = (int)*mf;
+                    j["streaming"] = g_engine.synth->is_streaming_supported();
+                } else {
+                    j["model_format"] = "legacy";
+                }
 #ifdef HOLOS_WITH_VERBALIZER
                 j["verbalizer"] = g_neural ? "neural+rule" : "rule";
 #else

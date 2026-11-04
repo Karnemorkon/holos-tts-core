@@ -612,13 +612,13 @@ struct NeuralVerbalizer::Impl {
 
         std::vector<int64_t> out_ids;
 
-        if (has_cache) {
+                if (has_cache) {
             // --- steps 1..N: decoder_with_past (KV cache) ---
             for (int step = 0; step < max_len; ++step) {
                 std::array<int64_t, 2> cur_shape{1, 1};
                 std::vector<int64_t> cur{prev};
 
-                std::vector<Ort::Value> feed(past_slots.size());
+                std::vector<Ort::Value> feed; feed.reserve(past_slots.size());
                 std::vector<const char*> feed_names;
                 feed_names.reserve(past_slots.size());
                 bool use_cache_step = true;
@@ -626,20 +626,20 @@ struct NeuralVerbalizer::Impl {
                     auto& sl = past_slots[i];
                     feed_names.push_back(sl.name.c_str());
                     if (sl.kind == SlotKind::Ids) {
-                        feed[i] = Ort::Value::CreateTensor<int64_t>(
-                            mem, cur.data(), cur.size(), cur_shape.data(), 2);
+                        feed.push_back(Ort::Value::CreateTensor<int64_t>(
+                            mem, cur.data(), cur.size(), cur_shape.data(), 2));
                     } else if (sl.kind == SlotKind::Mask) {
-                        feed[i] = Ort::Value::CreateTensor<int64_t>(
-                            mem, mask.data(), mask.size(), shape.data(), 2);
+                        feed.push_back(Ort::Value::CreateTensor<int64_t>(
+                            mem, mask.data(), mask.size(), shape.data(), 2));
                     } else if (sl.kind == SlotKind::Past) {
-                        feed[i] = std::move(past[sl.past_idx]);
+                        feed.push_back(std::move(past[sl.past_idx]));
                     } else if (sl.kind == SlotKind::EncHidden) {
-                        feed[i] = Ort::Value::CreateTensor<float>(
+                        feed.push_back(Ort::Value::CreateTensor<float>(
                             mem, hidden_buf.data(), hidden_buf.size(),
-                            hidden_shape.data(), hidden_shape.size());
+                            hidden_shape.data(), hidden_shape.size()));
                     } else if (sl.kind == SlotKind::UseCache) {
-                        feed[i] = Ort::Value::CreateTensor<bool>(
-                            mem, &use_cache_step, 1, uc_shape.data(), 1);
+                        feed.push_back(Ort::Value::CreateTensor<bool>(
+                            mem, &use_cache_step, 1, uc_shape.data(), 1));
                     } else {
                         throw std::runtime_error("unexpected slot kind in dec_past");
                     }
@@ -661,13 +661,13 @@ struct NeuralVerbalizer::Impl {
 
                 // refill past: де present є у виходах — беремо новий, інакше (encoder KV)
                 // повертаємо попереднє значення з feed.
-                std::vector<Ort::Value> new_past(past_in_names.size());
+                std::vector<Ort::Value> new_past; new_past.reserve(past_in_names.size());
                 for (size_t pi = 0; pi < past_in_names.size(); ++pi) {
                     int oi = past_out_idx[pi];
                     if (oi >= 0) {
-                        new_past[pi] = std::move(res[oi]);
+                        new_past.push_back(std::move(res[oi]));
                     } else {
-                        new_past[pi] = std::move(feed[past_feed_pos[pi]]);
+                        new_past.push_back(std::move(feed[past_feed_pos[pi]]));
                     }
                 }
                 past = std::move(new_past);
@@ -677,6 +677,8 @@ struct NeuralVerbalizer::Impl {
                 prev = nxt;
             }
         } else {
+            // --- fallback: повний перерахунок кожен крок (decoder_model) ---
+
             // --- fallback: повний перерахунок кожен крок (decoder_model) ---
             std::vector<int64_t> cur{decoder_start, prev};
             for (int step = 0; step < max_len; ++step) {

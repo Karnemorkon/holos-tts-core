@@ -1,9 +1,12 @@
 # holos-tts-core: C++ native TTS server (:8004), API-parity with HolosTTS-hybrid.
 #
-# Models: auto-downloaded on first `docker compose up -d` (HF, ~0.6 GB, public
-# repo, no token) into the holos_core_models volume; subsequent starts are
-# instant (downloader fetches only missing files).
-#   force re-download: docker compose run --rm downloader python3 scripts/download_models.py --out models --force
+# Models: auto-downloaded on first `docker compose up -d` (HF, public repo, no
+# token) into the holos_core_models volume; subsequent starts are instant
+# (downloader fetches only missing files). Default format is the multi-stage
+# `holos-onnx` bundle (encoder/prosody/decoder + streaming); the legacy
+# single-graph model is still supported via HOLOS_MODEL_FORMAT=legacy.
+#   force re-download: docker compose run --rm downloader python3 scripts/download_models.py --out models --format bundle --force
+#   legacy models:     docker compose run --rm downloader python3 scripts/download_models.py --out models --format legacy --force
 #   legacy M2M100 verbalizer: add --with-m2m100
 #
 # Cloned voices (UI): persisted in the holos_core_speakers volume (speakers/*.npy,
@@ -23,6 +26,10 @@ services:
       - "8004:8004"
     environment:
       - HOLOS_MODELS_DIR=/app/models
+      # Багатоетапний бандл holos-onnx (encoder/prosody/decoder + streaming).
+      # HOLOS_MODEL_FORMAT=auto: бандл, якщо є маніфест, інакше legacy-граф.
+      - HOLOS_ONNX=/app/models/holos-onnx
+      - HOLOS_MODEL_FORMAT=${HOLOS_MODEL_FORMAT:-auto}
       # neural (default) | rule | off — також перемикається per-request через UI/API
       - HOLOS_VERBALIZER_DIR=/app/models/verbalizer/gemma-int8
       - HOLOS_PORT=8004
@@ -66,7 +73,7 @@ services:
       - holos_core_models:/work/models
     command: >
       sh -c "pip install -q huggingface_hub &&
-             python3 scripts/download_models.py --out models"
+             python3 scripts/download_models.py --out models --format bundle"
 
 volumes:
   holos_core_models:

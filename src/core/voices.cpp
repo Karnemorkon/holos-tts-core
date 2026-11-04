@@ -23,6 +23,16 @@ Voices Voices::load(const std::string& json_path) {
     return v;
 }
 
+Voices Voices::from_map(std::map<std::string, std::vector<float>> map) {
+    Voices v;
+    for (auto& [name, arr] : map) {
+        if (arr.size() != 256)
+            throw std::runtime_error("voice '" + name + "' must be 256 floats");
+        v.map_[name] = std::move(arr);
+    }
+    return v;
+}
+
 std::vector<std::string> Voices::names() const {
     std::vector<std::string> out;
     out.reserve(map_.size());

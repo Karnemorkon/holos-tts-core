@@ -2,29 +2,52 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <memory>
+#include <optional>
+#include <functional>
+
+#include "bundle.h"
 
 namespace holos {
 
-// ONNX-генератор (holos_cpu_int8.onnx) через ONNX Runtime C++.
-// tokens int64 [1,N] (BOS=0 + токени фонем + EOS=0), voice float32 [1,256],
-// speed float32 [1] -> audio float32 [1,S].
+enum class SynthesizerMode {
+    Auto,
+    Legacy,
+    Bundle
+};
+
 class Synthesizer {
 public:
-    explicit Synthesizer(const std::string& onnx_path, int intra_threads = 0);
+    explicit Synthesizer(const std::string& path, int intra_threads = 0, SynthesizerMode mode = SynthesizerMode::Auto);
     ~Synthesizer();
     Synthesizer(const Synthesizer&) = delete;
     Synthesizer& operator=(const Synthesizer&) = delete;
 
-    // Токени фонем (БЕЗ BOS/EOS) + голос (256 float) + швидкість.
-    // BOS/EOS=0 додаються всередині (як [0] + tokenizer(phonemes) + [0]).
+    SynthesizerMode mode() const;
+
     std::vector<float> generate(const std::vector<int64_t>& phoneme_ids,
                                 const float* voice256, float speed = 1.0f) const;
+
+    template<typename F>
+    bool generate_stream(const std::vector<int64_t>& phoneme_ids,
+                         const float* voice256, float speed,
+                         const StreamingConfig& cfg,
+                         F&& on_chunk) const;
+
+    std::optional<uint32_t> sample_rate() const;
+    std::optional<size_t> samples_per_frame() const;
+    std::optional<size_t> max_frames() const;
+    std::optional<size_t> voice_dim() const;
+    std::optional<std::vector<std::string>> voice_names() const;
+    std::optional<const std::vector<float>*> voice(const std::string& name) const;
+    std::optional<std::vector<std::string>> vocab() const;
+    bool is_streaming_supported() const;
 
     int intra_threads() const;
 
 private:
     struct Impl;
-    Impl* impl_;
+    std::unique_ptr<Impl> impl_;
 };
 
 } // namespace holos

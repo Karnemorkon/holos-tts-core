@@ -1,4 +1,5 @@
 #pragma once
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -11,6 +12,8 @@ public:
     Voices() = default;
     // Завантаження з voices.json (об'єкт: name -> масив 256 float).
     static Voices load(const std::string& json_path);
+    // Побудова з готової мапи (наприклад, voices.npz бандла holos-onnx).
+    static Voices from_map(std::map<std::string, std::vector<float>> map);
 
     bool has(const std::string& name) const { return map_.count(name) != 0; }
     size_t size() const { return map_.size(); }

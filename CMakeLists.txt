@@ -34,6 +34,7 @@ set(HOLOS_TEST_VERBALIZER_GEMMA_DIR "" CACHE PATH "gemma int8 verbalizer models 
 set(HOLOS_TEST_VOICE_ENCODER "" CACHE PATH "voice_encoder.onnx path for golden test")
 
 include(cmake/deps.cmake)
+find_package(ZLIB REQUIRED)
 
 # --- core library -----------------------------------------------------------
 add_library(holos_core
@@ -43,7 +44,7 @@ add_library(holos_core
   src/core/ipa_uk.cpp
 )
 target_include_directories(holos_core PUBLIC src)
-target_link_libraries(holos_core PUBLIC nlohmann_json::nlohmann_json pcre2-8 utf8proc)
+target_link_libraries(holos_core PUBLIC nlohmann_json::nlohmann_json pcre2-8 utf8proc ZLIB::ZLIB)
 
 find_package(marisa QUIET)
 if(marisa_FOUND)
@@ -54,7 +55,7 @@ else()
 endif()
 
 if(HOLOS_WITH_ORT)
-  target_sources(holos_core PRIVATE src/core/phonemize.cpp src/core/synth.cpp src/core/voices.cpp src/core/audio.cpp src/core/accentor.cpp src/core/audio_io.cpp src/core/voice_encoder.cpp)
+  target_sources(holos_core PRIVATE src/core/phonemize.cpp src/core/synth.cpp src/core/voices.cpp src/core/audio.cpp src/core/accentor.cpp src/core/audio_io.cpp src/core/voice_encoder.cpp src/core/bundle.cpp src/core/bundle_synthesizer.cpp)
   target_compile_definitions(holos_core PUBLIC HOLOS_WITH_ORT=1)
   target_link_libraries(holos_core PRIVATE dr_wav)
   if(HOLOS_ORT_ROOT)
