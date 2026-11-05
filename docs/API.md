@@ -24,6 +24,34 @@ curl -s -X POST http://localhost:8004/api/synthesize \
   | python3 -c 'import sys,json,base64; open("out.wav","wb").write(base64.b64decode(json.load(sys.stdin)["audio_base64"]))'
 ```
 
+## `POST /api/synthesize_dialogue`
+
+Мульти-спікерний синтез: масив реплік різними голосами в одному WAV.
+
+| Поле | Тип | Опис |
+|---|---|---|
+| `segments` | array (обовʼязкове) | 1…200 реплік |
+| `segments[].text` | str | Текст репліки (мінімальної довжини немає) |
+| `segments[].voice` | str | Пресет або клонований голос (типово — перший) |
+| `segments[].speed` | float | Швидкість 0.25–4.0 (типово 1.0) |
+| `segments[].auto_verbalize` | str/bool | `neural` (типово), `rule`, `off` |
+| `segments[].raw_stress` | bool | `true` → без автонаголосу |
+| `segments[].start_offset_ms` | int | Абсолютний початок репліки від початку аудіо (0…600000). Без поля репліка йде послідовно за попередньою; перекриття змішуються (поліфонія) |
+| `format` | str | Лише `wav` (типово) |
+
+Сумарний текст усіх реплік — до 50000 символів.
+
+Відповідь: `{format, sample_rate, duration_sec, segments: [{index, voice, speed, text,
+verbalized_text, duration_sec, start_offset_ms, raw_stress, auto_verbalize}], audio_base64}`.
+
+```bash
+curl -s -X POST http://localhost:8004/api/synthesize_dialogue \
+  -H 'Content-Type: application/json' \
+  -d '{"segments":[{"text":"Привіт, я Олена.","voice":"Speaker_0"},
+                   {"text":"Привіт, я Іван.","voice":"Speaker_1","start_offset_ms":1200}]}' \
+  | python3 -c 'import sys,json,base64; open("dialog.wav","wb").write(base64.b64decode(json.load(sys.stdin)["audio_base64"]))'
+```
+
 ## `POST /api/verbalize`
 
 ```bash
@@ -75,6 +103,10 @@ curl -s -X POST http://localhost:8004/v1/audio/speech \
 
 Конфіг: `text` (обовʼязково), `voice`, `speed`, `auto_verbalize`, `raw_stress`.
 Помилка сервера → текстовий кадр `{"error": "..."}`.
+
+Діалог: замість `text` передайте `{"dialogue": true, "segments": [...]}` (ті самі поля, що
+в HTTP-ендпоінті). Репліки синтезуються послідовно в один потік; додатково надсилається
+прогрес сегмента `{"progress": {"phase": "segment", "current": 2, "total": 3}}`.
 
 ```python
 import asyncio, json, websockets

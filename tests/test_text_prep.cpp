@@ -41,6 +41,30 @@ int main(int argc, char** argv) {
             }
         }
     }
+
+    // English transliteration regression checks.
+    struct TrCase { std::string in, exp; };
+    const TrCase tr_cases[] = {
+        {"NATO.", "нато."},
+        {"hello", "хело"},
+        {"Hello,", "хело,"},
+        {"API-ключ", "е п і-ключ"},
+        {"CI/CD", "сі ай ці ді"},
+        {"NASA", "ен а ес а"},
+        {"Windows 10", "віндоус 10"},
+        {"C++", "сі плюс плюс"},
+        {"Привіт, світе", "Привіт, світе"},
+        {"Python.", "пайтон."},
+    };
+    for (const auto& c : tr_cases) {
+        std::string got = TextPrep::transliterate_english(c.in);
+        if (got == c.exp) { ++pass; } else {
+            ++fail;
+            std::cerr << "FAIL translit [" << c.in << "]\n  exp{" << c.exp
+                      << "}\n  got{" << got << "}\n";
+        }
+    }
+
     std::cout << pass << " passed, " << fail << " failed\n";
     return fail ? 1 : 0;
 }

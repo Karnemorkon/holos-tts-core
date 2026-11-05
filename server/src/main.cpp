@@ -569,9 +569,14 @@ void handle_synthesize(const HttpRequestPtr& req,
     }
 }
 
-// /api/synthesize_dialogue — мульти-спікерний синтез.
-// Вхід: {segments: [{text, voice, speed?, raw_stress?, auto_verbalize?}, ...], format: "wav"}
-// Вивід: {audio_base64, duration_sec, sample_rate, segments: [{voice, duration_sec, text, verbalized_text}, ...]}
+// /api/synthesize_dialogue — мульти-спікерний синтез, у т.ч. поліфонія.
+// Вхід: {segments: [{text, voice, speed?, raw_stress?, auto_verbalize?, start_offset_ms?}, ...],
+//        format: "wav"}
+//   start_offset_ms — абсолютний початок репліки від початку аудіо (ms).
+//   Якщо не заданий, репліка йде послідовно за попередньою.
+// Вихід: {audio_base64, duration_sec, sample_rate,
+//         segments: [{index, voice, speed, text, verbalized_text, duration_sec,
+//                     start_offset_ms, raw_stress, auto_verbalize}, ...]}
 void handle_synthesize_dialogue(const HttpRequestPtr& req,
                                 std::function<void(const HttpResponsePtr&)>&& callback) {
     const auto& body = req->getJsonObject();
@@ -586,21 +591,42 @@ void handle_synthesize_dialogue(const HttpRequestPtr& req,
     if (format != "wav") { callback(json_error(400, "format: у C++ підтримується лише wav")); return; }
 
     const Json::Value& segs = j["segments"];
-    std::vector<std::vector<int16_t>> all_pcm;
-    Json::Value seg_results(Json::arrayValue);
-    double total_audio_sec = 0.0;
+    constexpr int kMaxSegments = 200;
+    constexpr size_t kMaxTotalChars = 50000;
+    if (segs.size() > kMaxSegments) {
+        callback(json_error(400, "забагато сегментів (максимум " + std::to_string(kMaxSegments) + ")"));
+        return;
+    }
 
+    std::vector<std::vector<int16_t>> all_pcm;
+    std::vector<size_t> offsets;               // початок сегмента у семплах
+    Json::Value seg_results(Json::arrayValue);
+    Timings tm_total;
+    size_t total_chars = 0;
+    size_t cursor = 0;                         // кінець останньої репліки
+
+    try {
     for (int i = 0; i < (int)segs.size(); ++i) {
         const Json::Value& s = segs[i];
-        std::string text = s.get("text", "").asString();
-        if (text.empty()) { callback(json_error(400, "segment " + std::to_string(i) + ": text is empty")); return; }
+        std::string text = trim(s.get("text", "").asString());
+        if (text.empty()) {
+            callback(json_error(400, "segment " + std::to_string(i) + ": text is empty"));
+            return;
+        }
+        total_chars += text.size();
+        if (total_chars > kMaxTotalChars) {
+            callback(json_error(400, "сумарний текст сегментів перевищує " +
+                                         std::to_string(kMaxTotalChars) + " символів"));
+            return;
+        }
         std::string voice_name = s.get("voice", "").asString();
         float speed = (float)s.get("speed", 1.0).asDouble();
         bool raw_stress = s.get("raw_stress", false).asBool();
         VbMode vb_mode = parse_vb_mode(s);
 
         if (!valid_speed(speed)) {
-            callback(json_error(400, "segment " + std::to_string(i) + ": speed мусить бути в діапазоні 0.25-4.0"));
+            callback(json_error(400, "segment " + std::to_string(i) +
+                                         ": speed мусить бути в діапазоні 0.25-4.0"));
             return;
         }
         std::string voice = g_engine.pick_voice(voice_name);
@@ -609,13 +635,36 @@ void handle_synthesize_dialogue(const HttpRequestPtr& req,
             return;
         }
 
+        // start_offset_ms: абсолютний початок репліки (поліфонія). Без нього —
+        // репліка йде послідовно за попередньою.
+        size_t start = cursor;
+        if (s.isMember("start_offset_ms") && !s["start_offset_ms"].isNull()) {
+            double off_ms = s["start_offset_ms"].asDouble();
+            if (!(off_ms >= 0.0) || off_ms > 600000.0) {
+                callback(json_error(400, "segment " + std::to_string(i) +
+                                             ": start_offset_ms мусить бути 0-600000"));
+                return;
+            }
+            start = (size_t)std::llround(off_ms * (double)holos::kSampleRate / 1000.0);
+        }
+
         std::string vtext;
         Timings tm;
-        std::vector<int16_t> pcm = g_engine.synthesize_pcm(text, voice, speed, raw_stress, vb_mode, &tm, &vtext);
-        double seg_sec = (double)pcm.size() / holos::kSampleRate;
-        total_audio_sec += seg_sec;
-
+        std::vector<int16_t> pcm =
+            g_engine.synthesize_pcm(text, voice, speed, raw_stress, vb_mode, &tm, &vtext);
+        if (pcm.empty()) {
+            callback(json_error(500, "segment " + std::to_string(i) +
+                                         ": синтез повернув порожній аудіопотік"));
+            return;
+        }
+        cursor = std::max(cursor, start + pcm.size());
+        offsets.push_back(start);
         all_pcm.push_back(std::move(pcm));
+
+        tm_total.vb_ms += tm.vb_ms;
+        tm_total.phon_ms += tm.phon_ms;
+        tm_total.ort_ms += tm.ort_ms;
+        tm_total.parts += tm.parts;
 
         Json::Value sr;
         sr["index"] = i;
@@ -623,18 +672,31 @@ void handle_synthesize_dialogue(const HttpRequestPtr& req,
         sr["speed"] = speed;
         sr["text"] = text;
         sr["verbalized_text"] = vtext;
-        sr["duration_sec"] = seg_sec;
+        sr["duration_sec"] = (double)all_pcm.back().size() / (double)holos::kSampleRate;
+        sr["start_offset_ms"] = (double)start * 1000.0 / (double)holos::kSampleRate;
         sr["raw_stress"] = raw_stress;
-        sr["auto_verbalize"] = (vb_mode == VbMode::Neural ? "neural" : (vb_mode == VbMode::Rule ? "rule" : "off"));
+        sr["auto_verbalize"] =
+            (vb_mode == VbMode::Neural ? "neural" : (vb_mode == VbMode::Rule ? "rule" : "off"));
         seg_results.append(sr);
     }
+    } catch (const std::exception& e) {
+        callback(json_error(500, e.what()));
+        return;
+    }
 
-    // Concatenate all PCM
-    size_t total_samples = 0;
-    for (const auto& p : all_pcm) total_samples += p.size();
-    std::vector<int16_t> concat_pcm;
-    concat_pcm.reserve(total_samples);
-    for (const auto& p : all_pcm) concat_pcm.insert(concat_pcm.end(), p.begin(), p.end());
+    // Змішування з урахуванням оффсетів (перекриття = поліфонія).
+    std::vector<int32_t> mix(cursor, 0);
+    for (size_t k = 0; k < all_pcm.size(); ++k) {
+        const auto& pcm = all_pcm[k];
+        const size_t off = offsets[k];
+        for (size_t n = 0; n < pcm.size(); ++n) mix[off + n] += (int32_t)pcm[n];
+    }
+    int32_t peak = 0;
+    for (int32_t v : mix) peak = std::max(peak, std::abs(v));
+    const double gain = (peak > 32767) ? 32767.0 / (double)peak : 1.0;
+    std::vector<int16_t> concat_pcm(mix.size());
+    for (size_t n = 0; n < mix.size(); ++n)
+        concat_pcm[n] = (int16_t)std::llround((double)mix[n] * gain);
 
     auto bytes = holos::wav_bytes(concat_pcm, holos::kSampleRate);
     std::string b64 = drogon::utils::base64Encode(
@@ -643,10 +705,14 @@ void handle_synthesize_dialogue(const HttpRequestPtr& req,
     Json::Value resp;
     resp["format"] = format;
     resp["sample_rate"] = holos::kSampleRate;
-    resp["duration_sec"] = total_audio_sec;
+    resp["duration_sec"] = (double)concat_pcm.size() / (double)holos::kSampleRate;
     resp["audio_base64"] = b64;
     resp["segments"] = seg_results;
-    if (g_metrics) resp["timings"] = timings_json(Timings{}); // per-segment timings not accumulated
+    if (g_metrics) {
+        tm_total.total_ms = tm_total.vb_ms + tm_total.phon_ms + tm_total.ort_ms;
+        resp["timings"] = timings_json(tm_total);
+    }
+    log_metrics("/api/synthesize_dialogue", VbMode::Neural, tm_total, resp["duration_sec"].asDouble());
     callback(HttpResponse::newHttpJsonResponse(resp));
 }
 
@@ -830,23 +896,46 @@ public:
         VbMode vb_mode = VbMode::Neural;
         std::vector<Json::Value> segments;
         
-        if (cfg.isMember("dialogue") && cfg["dialogue"].asBool()) {
+        if (is_dialogue) {
             if (!cfg.isMember("segments") || !cfg["segments"].isArray() || cfg["segments"].size() == 0) {
                 Json::Value e; e["error"] = "діалог: очікується масив segments";
                 conn->send(Json::writeString(Json::StreamWriterBuilder(), e),
                            drogon::WebSocketMessageType::Text);
-                conn->shutdown();
                 return;
             }
             auto& segs = cfg["segments"];
-            for (const auto& s : segs) {
-                if (!s.isMember("text") || !s.isMember("voice")) {
-                    Json::Value e; e["error"] = "segment: очікується text і voice";
+            if (segs.size() > 200) {
+                Json::Value e; e["error"] = "забагато сегментів (максимум 200)";
+                conn->send(Json::writeString(Json::StreamWriterBuilder(), e),
+                           drogon::WebSocketMessageType::Text);
+                return;
+            }
+            for (int i = 0; i < (int)segs.size(); ++i) {
+                const auto& s = segs[i];
+                const std::string seg_text = s.get("text", "").asString();
+                const std::string seg_voice = s.get("voice", "").asString();
+                const float seg_speed = (float)s.get("speed", 1.0).asDouble();
+                if (trim(seg_text).empty()) {
+                    Json::Value e; e["error"] = "segment " + std::to_string(i) + ": text is empty";
                     conn->send(Json::writeString(Json::StreamWriterBuilder(), e),
                                drogon::WebSocketMessageType::Text);
-                    conn->shutdown();
                     return;
                 }
+                if (!valid_speed(seg_speed)) {
+                    Json::Value e; e["error"] = "segment " + std::to_string(i) +
+                                                    ": speed мусить бути в діапазоні 0.25-4.0";
+                    conn->send(Json::writeString(Json::StreamWriterBuilder(), e),
+                               drogon::WebSocketMessageType::Text);
+                    return;
+                }
+                if (g_engine.pick_voice(seg_voice).empty()) {
+                    Json::Value e; e["error"] = "segment " + std::to_string(i) +
+                                                    ": Невідомий голос: " + seg_voice;
+                    conn->send(Json::writeString(Json::StreamWriterBuilder(), e),
+                               drogon::WebSocketMessageType::Text);
+                    return;
+                }
+                segments.push_back(s);
             }
         } else {
             err = validate_synth_cfg(cfg, text, voice, speed, raw_stress, vb_mode);
@@ -863,31 +952,59 @@ public:
         cancel->store(false);
 
         // Синтез у detached thread, щоб не блокувати event loop.
-        std::thread([conn, cancel, text, voice, speed, raw_stress, vb_mode]() {
+        std::thread([conn, cancel, text, voice, speed, raw_stress, vb_mode, is_dialogue, segments]() {
             Timings tm;
             bool cancelled = false;
+            auto send_chunk = [&conn](const int16_t* pcm, size_t n) {
+                std::string bytes(reinterpret_cast<const char*>(pcm), n * 2);
+                conn->send(bytes, drogon::WebSocketMessageType::Binary);
+                return true;
+            };
+            auto progress = [&conn](const std::string& phase, int cur, int total) {
+                Json::Value p;
+                p["phase"] = phase;
+                if (phase == "synth") { p["current"] = cur; p["total"] = total; }
+                Json::Value msg;
+                msg["progress"] = p;
+                conn->send(Json::writeString(Json::StreamWriterBuilder(), msg),
+                           drogon::WebSocketMessageType::Text);
+            };
             try {
-                double duration = synth_stream_send(
-                    text, voice, speed, raw_stress, vb_mode,
-                    [&conn](const int16_t* pcm, size_t n) {
-                        std::string bytes(reinterpret_cast<const char*>(pcm), n * 2);
-                        conn->send(bytes, drogon::WebSocketMessageType::Binary);
-                        return true;
-                    },
-                    &tm, cancel.get(),
-                    [&conn](const std::string& phase, int cur, int total) {
-                        Json::Value p;
-                        p["phase"] = phase;
-                        if (phase == "synth") { p["current"] = cur; p["total"] = total; }
+                double duration = 0.0;
+                if (is_dialogue) {
+                    const int total_segs = (int)segments.size();
+                    for (int si = 0; si < total_segs; ++si) {
+                        if (cancel->load(std::memory_order_relaxed)) { cancelled = true; break; }
+                        const Json::Value& s = segments[si];
+                        const std::string dtext = s.get("text", "").asString();
+                        const std::string dvoice = g_engine.pick_voice(s.get("voice", "").asString());
+                        const float dspeed = (float)s.get("speed", 1.0).asDouble();
+                        const bool draw = s.get("raw_stress", false).asBool();
+                        const VbMode dvb = parse_vb_mode(s);
+                        if (dvoice.empty())
+                            throw std::runtime_error("Невідомий голос у сегменті " + std::to_string(si));
+
+                        Json::Value segp;
+                        segp["phase"] = "segment";
+                        segp["current"] = si + 1;
+                        segp["total"] = total_segs;
                         Json::Value msg;
-                        msg["progress"] = p;
+                        msg["progress"] = segp;
                         conn->send(Json::writeString(Json::StreamWriterBuilder(), msg),
                                    drogon::WebSocketMessageType::Text);
-                    },
-                    &cancelled);
+
+                        duration += synth_stream_send(dtext, dvoice, dspeed, draw, dvb,
+                                                      send_chunk, &tm, cancel.get(), progress, &cancelled);
+                        if (cancelled) break;
+                    }
+                } else {
+                    duration = synth_stream_send(text, voice, speed, raw_stress, vb_mode,
+                                                 send_chunk, &tm, cancel.get(), progress, &cancelled);
+                }
                 Json::Value fin;
                 fin["done"] = true;
                 fin["cancelled"] = cancelled;
+                fin["dialogue"] = is_dialogue;
                 fin["sample_rate"] = holos::kSampleRate;
                 fin["duration_sec"] = std::round(duration * 1000.0) / 1000.0;
                 if (g_metrics) fin["timings"] = timings_json(tm);
@@ -943,6 +1060,19 @@ audio{width:100%;margin-top:.75rem}
 .prog-track{height:6px;background:#2a2f3a;border-radius:3px;overflow:hidden}
 .prog-fill{height:100%;width:0;background:#3b82f6;transition:width .15s ease}
 .prog-label{margin-top:.3rem;font-size:.8rem;color:#9aa0aa}
+.mode-tabs{display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap}
+.mode-tab{padding:.55rem 1rem;border-radius:8px;background:#171a21;border:1px solid #2a2f3a;color:#9aa0aa;cursor:pointer;font-size:.9rem;user-select:none}
+.mode-tab:hover{border-color:#3b82f6;color:#e6e6e6}
+.mode-tab.active{background:#3b82f6;border-color:#3b82f6;color:#fff;font-weight:600}
+.seg-list{display:flex;flex-direction:column;gap:.75rem}
+.seg-item{background:#0f1115;border:1px solid #2a2f3a;border-radius:10px;padding:.75rem;display:flex;flex-direction:column;gap:.6rem}
+.seg-item.drag-over{border-color:#3b82f6}
+.seg-head{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;cursor:grab}
+.seg-idx{color:#9aa0aa;font-size:.8rem;font-weight:600}
+.seg-btns{margin-left:auto;display:flex;gap:.3rem}
+.seg-btns button{padding:.35rem .6rem;font-size:.8rem;background:#2a2f3a}
+.seg-btns button.danger{background:#7f1d1d}
+textarea.seg-text{min-height:60px}
 .disclaimer{font-size:.78rem;color:#6b7280;line-height:1.5;border-left:3px solid #374151;padding-left:.75rem;margin-top:1.5rem}
 </style>
 </head>
@@ -951,6 +1081,12 @@ audio{width:100%;margin-top:.75rem}
 <h1>HolosTTS — український TTS (native C++)</h1>
 <p class="sub">Drogon HTTP/WS · ONNX Runtime INT8 CPU · API-паритет HolosTTS-hybrid</p>
 
+<div class="mode-tabs" id="modeTabs">
+  <div class="mode-tab active" data-mode="single">Одиночний текст</div>
+  <div class="mode-tab" data-mode="dialogue">Діалог (мульти-спікер)</div>
+</div>
+
+<div id="modeSingle">
 <div class="card">
   <label for="text">Текст</label>
   <textarea id="text" placeholder="Введіть текст для синтезу (мінімум 10 символів)…"></textarea>
@@ -992,6 +1128,42 @@ audio{width:100%;margin-top:.75rem}
   <div class="status" id="status"></div>
   <audio id="player" controls style="display:none"></audio>
 </div>
+</div>
+
+<!-- Dialogue mode -->
+<div id="modeDialogue" style="display:none">
+<div class="card">
+  <label>Сегменти діалогу</label>
+  <div style="margin-bottom:.75rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+    <button id="addSegBtn" type="button">+ Додати сегмент</button>
+    <button id="clearSegBtn" class="secondary" type="button">Очистити</button>
+    <span id="segCount" style="margin-left:auto;color:#9aa0aa;font-size:.85rem">Сегментів: 0</span>
+  </div>
+  <div class="seg-list" id="segList"></div>
+  <p style="font-size:.78rem;color:#6b7280;margin:.6rem 0 0">Без «start_offset_ms» репліки йдуть послідовно; із зазначеним оффсетом — накладаються (поліфонія).</p>
+  <div style="margin-top:1rem;display:flex;gap:.75rem;flex-wrap:wrap">
+    <button id="synthDlgBtn">Синтезувати діалог</button>
+    <button id="cancelDlgBtn" class="secondary" type="button" disabled>Скасувати</button>
+    <button id="dlDlgBtn" class="secondary" disabled>Завантажити WAV</button>
+  </div>
+  <div class="prog" id="progDlg">
+    <div class="prog-track"><div class="prog-fill" id="progFillDlg"></div></div>
+    <div class="prog-label" id="progLabelDlg"></div>
+  </div>
+  <div class="status" id="statusDlg"></div>
+  <audio id="playerDlg" controls style="display:none"></audio>
+</div>
+
+<div class="card">
+  <label>Імпорт/Експорт діалогу (JSON)</label>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem">
+    <button id="exportDlgBtn" class="secondary" type="button">Експорт JSON</button>
+    <input type="file" id="importDlgFile" accept=".json" style="display:none" onchange="importDialogue(this.files[0])">
+    <button id="importDlgBtn" class="secondary" type="button" onclick="document.getElementById('importDlgFile').click()">Імпорт JSON</button>
+  </div>
+  <p style="font-size:.78rem;color:#6b7280;margin:.5rem 0 0">Формат: {segments: [{text, voice, speed?, raw_stress?, auto_verbalize?, start_offset_ms?}, ...]}</p>
+</div>
+</div>
 
 <div class="card">
   <label>Клонування голосу з WAV</label>
@@ -1025,6 +1197,7 @@ audio{width:100%;margin-top:.75rem}
 const $=id=>document.getElementById(id);
 const status=(m,cls="")=>{const s=$("status");s.textContent=m;s.className="status "+cls};
 let lastBlob=null;
+let dlgSegs=[],dlgAbort=null,lastDlgBlob=null,allVoices=[],dragIdx=null;
 
 $("speed").oninput=()=>{$("speedVal").textContent=(+$("speed").value).toFixed(2)};
 
@@ -1033,7 +1206,7 @@ function updateDel(){$("delBtn").disabled=!customSet.has($("voice").value)}
 async function loadVoices(preferred){
   try{
     const r=await fetch("/api/voices");const d=await r.json();
-    customSet=new Set(d.custom||[]);cloningReady=!!d.cloning;
+    customSet=new Set(d.custom||[]);cloningReady=!!d.cloning;allVoices=(d.voices||[]).slice();
     const sel=$("voice");const cur=preferred||sel.value;sel.innerHTML="";
     const groups=[["Пресети",(d.voices||[]).filter(v=>!customSet.has(v))],
                   ["Клоновані",(d.voices||[]).filter(v=>customSet.has(v))]];
@@ -1047,10 +1220,238 @@ async function loadVoices(preferred){
     $("cloneBtn").disabled=!cloningReady;
     $("cloneHint").textContent=cloningReady?"":"Клонування недоступне: на сервері немає voice_encoder.onnx.";
     updateDel();
+    if(dlgSegs.length)renderSegs();
   }catch(e){status("Не вдалося завантажити голоси: "+e,"err")}
 }
 loadVoices();
 $("voice").onchange=updateDel;
+
+// Mode switching
+const modeTabs=$("modeTabs");
+const modeSingle=$("modeSingle");
+const modeDialogue=$("modeDialogue");
+modeTabs.querySelectorAll(".mode-tab").forEach(tab=>{
+  tab.onclick=()=>{
+    modeTabs.querySelectorAll(".mode-tab").forEach(t=>t.classList.remove("active"));
+    tab.classList.add("active");
+    const m=tab.dataset.mode;
+    modeSingle.style.display=m==="single"?"":"none";
+    modeDialogue.style.display=m==="dialogue"?"":"none";
+  };
+});
+
+// ---------- Діалоговий режим ----------
+function dstatus(m,cls=""){const s=$("statusDlg");s.textContent=m;s.className="status "+cls}
+function updateSegCount(){$("segCount").textContent="Сегментів: "+dlgSegs.length}
+function setDlgProgress(pct,label){
+  const box=$("progDlg");box.classList.add("on");
+  $("progFillDlg").style.width=Math.max(0,Math.min(100,pct))+"%";
+  $("progLabelDlg").textContent=label||"";
+}
+function hideDlgProgress(){$("progDlg").classList.remove("on");$("progFillDlg").style.width="0%";$("progLabelDlg").textContent=""}
+
+function fillVoiceSelect(sel,cur){
+  sel.innerHTML="";
+  allVoices.forEach(v=>{const o=document.createElement("option");o.value=v;o.textContent=v;sel.appendChild(o)});
+  if(cur&&allVoices.includes(cur))sel.value=cur;
+  else if(allVoices.length)sel.value=allVoices[0];
+}
+
+function segButton(text,title,onclick,cls){
+  const b=document.createElement("button");b.type="button";b.textContent=text;b.title=title;
+  if(cls)b.className=cls;b.onclick=onclick;return b;
+}
+
+function renderSegs(){
+  const list=$("segList");list.innerHTML="";
+  if(!dlgSegs.length){
+    const p=document.createElement("p");
+    p.style.cssText="color:#6b7280;font-size:.85rem;margin:0";
+    p.textContent="Сегментів ще немає. Натисніть «+ Додати сегмент».";
+    list.appendChild(p);updateSegCount();return;
+  }
+  dlgSegs.forEach((seg,idx)=>{
+    const item=document.createElement("div");item.className="seg-item";
+    const head=document.createElement("div");head.className="seg-head";head.draggable=true;
+    head.ondragstart=e=>{dragIdx=idx;if(e.dataTransfer)e.dataTransfer.effectAllowed="move"};
+    const lab=document.createElement("span");lab.className="seg-idx";lab.textContent="#"+(idx+1);
+    const btns=document.createElement("div");btns.className="seg-btns";
+    btns.appendChild(segButton("↑","Вище",()=>moveSeg(idx,-1)));
+    btns.appendChild(segButton("↓","Нижче",()=>moveSeg(idx,1)));
+    btns.appendChild(segButton("⎘","Дублювати",()=>dupSeg(idx)));
+    btns.appendChild(segButton("🗑","Видалити",()=>delSeg(idx),"danger"));
+    head.append(lab,btns);
+    item.appendChild(head);
+
+    const ta=document.createElement("textarea");
+    ta.className="seg-text";ta.rows=2;ta.placeholder="Текст репліки…";
+    ta.value=seg.text||"";
+    ta.oninput=()=>{dlgSegs[idx].text=ta.value};
+    item.appendChild(ta);
+
+    const row=document.createElement("div");row.className="row";
+
+    const c1=document.createElement("div");
+    const l1=document.createElement("label");l1.textContent="Голос";
+    const sv=document.createElement("select");
+    fillVoiceSelect(sv,seg.voice);
+    sv.onchange=()=>{dlgSegs[idx].voice=sv.value};
+    c1.append(l1,sv);
+
+    const c2=document.createElement("div");
+    const l2=document.createElement("label");l2.textContent="Швидкість";
+    const sp=document.createElement("input");sp.type="range";sp.min="0.5";sp.max="2";sp.step="0.05";
+    sp.value=String(seg.speed==null?1:seg.speed);
+    const spv=document.createElement("span");spv.style.cssText="color:#9aa0aa;font-size:.8rem;min-width:2.4rem";
+    spv.textContent=(+sp.value).toFixed(2);
+    sp.oninput=()=>{dlgSegs[idx].speed=+sp.value;spv.textContent=(+sp.value).toFixed(2)};
+    const spWrap=document.createElement("div");spWrap.style.cssText="display:flex;align-items:center;gap:.5rem";
+    spWrap.append(sp,spv);
+    c2.append(l2,spWrap);
+
+    const c3=document.createElement("div");
+    const l3=document.createElement("label");l3.textContent="Вербалізація";
+    const svb=document.createElement("select");
+    [["neural","neural (якість)"],["rule","rule (швидкість)"],["off","вимкнено"]].forEach(([v,t])=>{
+      const o=document.createElement("option");o.value=v;o.textContent=t;svb.appendChild(o);
+    });
+    svb.value=seg.auto_verbalize||"neural";
+    svb.onchange=()=>{dlgSegs[idx].auto_verbalize=svb.value};
+    c3.append(l3,svb);
+
+    const c4=document.createElement("div");
+    const l4=document.createElement("label");l4.textContent="Наголос / оффсет";
+    const rawWrap=document.createElement("label");
+    rawWrap.style.cssText="display:flex;align-items:center;gap:.4rem;color:#e6e6e6;font-size:.85rem;margin:0 0 .4rem";
+    const cb=document.createElement("input");cb.type="checkbox";cb.checked=!!seg.raw_stress;
+    cb.onchange=()=>{dlgSegs[idx].raw_stress=cb.checked};
+    const cbTxt=document.createElement("span");cbTxt.textContent="raw_stress";
+    rawWrap.append(cb,cbTxt);
+    const off=document.createElement("input");
+    off.type="number";off.min="0";off.step="50";off.placeholder="авто (послідовно)";
+    off.value=(seg.start_offset_ms==null)?"":String(seg.start_offset_ms);
+    off.oninput=()=>{
+      const v=off.value.trim();
+      dlgSegs[idx].start_offset_ms=v?Math.max(0,parseInt(v,10)||0):null;
+    };
+    c4.append(l4,rawWrap,off);
+
+    row.append(c1,c2,c3,c4);
+    item.appendChild(row);
+
+    item.ondragover=e=>{if(dragIdx!=null){e.preventDefault();item.classList.add("drag-over")}};
+    item.ondragleave=()=>item.classList.remove("drag-over");
+    item.ondrop=e=>{
+      e.preventDefault();item.classList.remove("drag-over");
+      if(dragIdx==null||dragIdx===idx)return;
+      const moved=dlgSegs.splice(dragIdx,1)[0];
+      dlgSegs.splice(idx,0,moved);
+      dragIdx=null;renderSegs();
+    };
+    list.appendChild(item);
+  });
+  updateSegCount();
+}
+
+function addSeg(){
+  dlgSegs.push({text:"",voice:allVoices[0]||"",speed:1,raw_stress:false,
+                auto_verbalize:$("vbMode").value,start_offset_ms:null});
+  renderSegs();
+}
+function delSeg(i){dlgSegs.splice(i,1);renderSegs()}
+function dupSeg(i){dlgSegs.splice(i+1,0,Object.assign({},dlgSegs[i]));renderSegs()}
+function moveSeg(i,d){
+  const j=i+d;
+  if(j<0||j>=dlgSegs.length)return;
+  const moved=dlgSegs.splice(i,1)[0];
+  dlgSegs.splice(j,0,moved);renderSegs();
+}
+
+function dlgPayload(){
+  return dlgSegs.map(s=>{
+    const o={text:(s.text||"").trim(),voice:s.voice,speed:(s.speed==null?1:s.speed),
+             raw_stress:!!s.raw_stress,auto_verbalize:s.auto_verbalize||"neural"};
+    if(s.start_offset_ms!=null)o.start_offset_ms=Math.max(0,Math.round(s.start_offset_ms));
+    return o;
+  });
+}
+
+async function synthDialogue(){
+  const segs=dlgPayload();
+  if(!segs.length){dstatus("Додайте хоча б один сегмент","err");return}
+  if(segs.some(x=>!x.text)){dstatus("У кожному сегменті має бути текст","err");return}
+  dlgAbort=new AbortController();
+  lastDlgBlob=null;
+  $("synthDlgBtn").disabled=true;$("cancelDlgBtn").disabled=false;$("dlDlgBtn").disabled=true;
+  dstatus("Синтез діалогу…","");
+  setDlgProgress(0,"Синтез…");
+  const t0=performance.now();
+  try{
+    const r=await fetch("/api/synthesize_dialogue",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({format:"wav",segments:segs}),
+      signal:dlgAbort.signal});
+    const d=await r.json();
+    if(!r.ok){dstatus(d.detail||("HTTP "+r.status),"err");hideDlgProgress();return}
+    lastDlgBlob=b64ToBlob(d.audio_base64);
+    const url=URL.createObjectURL(lastDlgBlob);
+    const pl=$("playerDlg");pl.src=url;pl.style.display="";pl.play().catch(()=>{});
+    $("dlDlgBtn").disabled=false;
+    setDlgProgress(100,"Готово");
+    const el=((performance.now()-t0)/1000).toFixed(2);
+    dstatus("Готово: "+d.duration_sec.toFixed(2)+" с · "+d.segments.length+
+            " сегм. · "+(d.sample_rate/1000)+" kHz ("+el+" с)","ok");
+  }catch(e){
+    if(e.name==="AbortError")dstatus("Скасовано","");
+    else dstatus("Помилка: "+e,"err");
+    hideDlgProgress();
+  }finally{
+    dlgAbort=null;
+    $("synthDlgBtn").disabled=false;$("cancelDlgBtn").disabled=true;
+  }
+}
+
+async function importDialogue(file){
+  if(!file)return;
+  try{
+    const d=JSON.parse(await file.text());
+    const segs=(Array.isArray(d)?d:d.segments)||[];
+    if(!segs.length)throw new Error("файл не містить segments");
+    dlgSegs=segs.map(x=>({
+      text:String(x.text==null?"":x.text),
+      voice:String(x.voice||allVoices[0]||""),
+      speed:(x.speed==null?1:+x.speed),
+      raw_stress:!!x.raw_stress,
+      auto_verbalize:x.auto_verbalize||"neural",
+      start_offset_ms:(x.start_offset_ms==null?null:Math.max(0,parseInt(x.start_offset_ms,10)||0))}));
+    renderSegs();
+    dstatus("Імпортовано сегментів: "+dlgSegs.length,"ok");
+  }catch(e){dstatus("Імпорт не вдався: "+(e.message||e),"err")}
+  finally{$("importDlgFile").value=""}
+}
+
+$("addSegBtn").onclick=addSeg;
+$("clearSegBtn").onclick=()=>{
+  if(dlgSegs.length&&!confirm("Очистити всі сегменти?"))return;
+  dlgSegs=[];renderSegs();dstatus("");
+};
+$("synthDlgBtn").onclick=synthDialogue;
+$("cancelDlgBtn").onclick=()=>{
+  if(dlgAbort){dlgAbort.abort();$("cancelDlgBtn").disabled=true;$("progLabelDlg").textContent="Скасування…"}
+};
+$("dlDlgBtn").onclick=()=>{
+  if(!lastDlgBlob)return;
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(lastDlgBlob);a.download="dialogue.wav";a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+};
+$("exportDlgBtn").onclick=()=>{
+  const blob=new Blob([JSON.stringify({segments:dlgPayload()},null,2)],{type:"application/json"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);a.download="dialogue.json";a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+};
+renderSegs();
 
 $("vbBtn").onclick=async()=>{
   const text=$("text").value;

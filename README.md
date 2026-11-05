@@ -103,7 +103,7 @@ python3 scripts/download_models.py --out models
 
 ## API
 
-`POST /api/synthesize`, `POST /api/verbalize`, `GET /api/voices`, `POST/DELETE /api/voices`,
+`POST /api/synthesize`, `POST /api/synthesize_dialogue` (мульти-спікер), `POST /api/verbalize`, `GET /api/voices`, `POST/DELETE /api/voices`,
 `GET /healthz`, OpenAI-сумісний `POST /v1/audio/speech` і WebSocket `/api/ws/synthesize`.
 Автентифікації немає; докладно — [docs/API.md](docs/API.md).
 
