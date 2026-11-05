@@ -421,6 +421,15 @@ jobs:
           $proc = Start-Process -FilePath "$bundle\bin\holos-server.exe" -PassThru -NoNewWindow `
             -RedirectStandardOutput "$env:RUNNER_TEMP\holos.out" `
             -RedirectStandardError "$env:RUNNER_TEMP\holos.err"
+          # Wait for server to be ready (up to 120 seconds)
+          for ($_ = 1; $_ -le 120; $_++) {
+            try {
+              $resp = Invoke-RestMethod -Uri "http://127.0.0.1:8004/healthz" -Method Get -TimeoutSec 2 -ErrorAction Stop
+              if ($resp.status -eq "ok") { break }
+            } catch { }
+            Start-Sleep 1
+          }
+          
           try {
             python scripts/smoke_api.py http://127.0.0.1:8004 $version
             if ($LASTEXITCODE -ne 0) { throw "smoke failed ($LASTEXITCODE)" }
