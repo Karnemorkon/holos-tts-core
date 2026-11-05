@@ -635,6 +635,14 @@ jobs:
           $errLog = Join-Path $env:RUNNER_TEMP "holos-installed.err"
           $proc = Start-Process -FilePath $server.FullName -WorkingDirectory $hostile -PassThru -NoNewWindow `
             -RedirectStandardOutput $outLog -RedirectStandardError $errLog
+          # Wait for server to be ready (up to 120 seconds)
+          for ($_ = 1; $_ -le 120; $_++) {
+            try {
+              $resp = Invoke-RestMethod -Uri "http://127.0.0.1:8004/healthz" -Method Get -TimeoutSec 2 -ErrorAction Stop
+              if ($resp.status -eq "ok") { break }
+            } catch { }
+            Start-Sleep 1
+          }
           try {
             & $python scripts/smoke_api.py http://127.0.0.1:8004 $version
             if ($LASTEXITCODE -ne 0) { throw "smoke failed ($LASTEXITCODE)" }
