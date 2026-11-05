@@ -31,7 +31,9 @@
   (клон зберігається під власним імʼям і стає звичайним `voice` для REST/OpenAI API).
 - **Нативний C++20**: Drogon HTTP/WS + ONNX Runtime; без Python, PyTorch і Gradio у рантаймі.
 - **Автовербалізація**: `neural` (Gemma-3-270M int8, типово) / `rule` (C++ регулярки) / `off`;
-  наголос — словник marisa-trie (2.9 млн форм) + accentor-lite ONNX для слів поза словником.
+  наголос — словник marisa-trie (2.9 млн форм; апострофи ʼ/’ згортаються до ASCII) +
+  accentor-lite ONNX (той самий, що й у апстрімі) для OOV і омонімів — 98,4%
+  збігу з авторським конвеєром на 10,7 тис. токенів (див. docs/ARCHITECTURE.md).
 - **Потоковий синтез**: REST-стрім (`/v1/audio/speech`), WebSocket `/api/ws/synthesize`
   (PCM16-чанки) і вбудований Web UI.
 - **API-паритет з HolosTTS-hybrid**: та сама схема запитів/відповідей, тривалість аудіо Δ ≤0.02 с.

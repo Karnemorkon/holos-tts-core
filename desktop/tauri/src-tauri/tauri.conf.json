@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "HolosTTS",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "identifier": "ua.morkon.holostts",
   "build": {
     "frontendDist": "../ui"
@@ -23,11 +23,15 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "resources": {
       "resources/lib/": "lib/"
     },
-    "externalBin": ["binaries/holos-server"],
+    "externalBin": [
+      "binaries/holos-server"
+    ],
     "category": "Utility",
     "shortDescription": "Ukrainian text-to-speech",
     "icon": [

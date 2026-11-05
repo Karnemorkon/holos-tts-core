@@ -72,6 +72,8 @@ struct LegacyImpl {
         opts.SetIntraOpNumThreads(intra);
         opts.SetInterOpNumThreads(1);
         opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        // Як в апстрімі (patriotyk/HolosTTS): без spin-wait intra-op пул ORT.
+        opts.AddConfigEntry("session.intra_op.allow_spinning", "0");
         session = std::make_unique<Ort::Session>(env, holos::ort_path(path).c_str(), opts);
 
         Ort::AllocatorWithDefaultOptions alloc;

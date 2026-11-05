@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(holos-tts-core VERSION 0.8.0 LANGUAGES CXX)
+project(holos-tts-core VERSION 0.8.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 if(MSVC)
@@ -19,6 +19,7 @@ option(HOLOS_WITH_CT2 "Enable CTranslate2 (verbalizer/stress neural models)" OFF
 option(HOLOS_WITH_VERBALIZER "Neural verbalizer (M2M100 ONNX int8 + SentencePiece)" ON)
 option(HOLOS_WITH_SERVER "Build the Drogon HTTP/WS server" OFF)
 option(HOLOS_BUILD_TESTS "Build unit/golden tests" ON)
+option(HOLOS_BUILD_TOOLS "Build dev utilities (stress-dump)" OFF)
 option(HOLOS_USE_SYSTEM_DROGON "Use find_package(Drogon) instead of FetchContent" OFF)
 
 # ONNX Runtime: prebuilt tarball dir (contains include/ + lib/). Set -DHOLOS_ORT_ROOT=...
@@ -113,6 +114,14 @@ add_executable(holos-cli src/cli/holos_cli.cpp)
 target_link_libraries(holos-cli PRIVATE holos_core)
 target_compile_definitions(holos-cli PRIVATE HOLOS_VERSION="${PROJECT_VERSION}")
 
+# --- dev tools (не входять у типову збірку) ---------------------------------
+# stress-dump: stdin -> текст з U+0301 через holos::stress_text (той самий шлях,
+# що в Phonemizer::phonemize). Потрібен для A/B-порівняння наголосів з апстрімом.
+if(HOLOS_BUILD_TOOLS AND TARGET holos_core)
+  add_executable(stress-dump tools/stress_dump.cpp)
+  target_link_libraries(stress-dump PRIVATE holos_core)
+endif()
+
 # --- server (M2) ------------------------------------------------------------
 if(HOLOS_WITH_SERVER)
   add_subdirectory(server)
@@ -132,4 +141,4 @@ if(HOLOS_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
 
-message(STATUS "holos-tts-core ${PROJECT_VERSION} | ORT=${HOLOS_WITH_ORT} CT2=${HOLOS_WITH_CT2} SERVER=${HOLOS_WITH_SERVER} TESTS=${HOLOS_BUILD_TESTS}")
+message(STATUS "holos-tts-core ${PROJECT_VERSION} | ORT=${HOLOS_WITH_ORT} CT2=${HOLOS_WITH_CT2} SERVER=${HOLOS_WITH_SERVER} TESTS=${HOLOS_BUILD_TESTS} TOOLS=${HOLOS_BUILD_TOOLS}")

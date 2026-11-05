@@ -39,6 +39,11 @@ struct SessionWrapper {
         opts.SetIntraOpNumThreads(intra_threads > 0 ? intra_threads : default_onnx_threads());
         opts.SetInterOpNumThreads(1);
         opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        // Як в апстрімі (patriotyk/HolosTTS): вимикаємо spin-wait пулу
+        // intra-op потоків ORT. На нашому навантаженні (CPU, теплі запити)
+        // різниці не видно, але налаштування нешкідливе й зберігає паритет
+        // з конфігурацією автора.
+        opts.AddConfigEntry("session.intra_op.allow_spinning", "0");
         session = std::make_unique<Ort::Session>(env, holos::ort_path(path).c_str(), opts);
         
         Ort::AllocatorWithDefaultOptions alloc;

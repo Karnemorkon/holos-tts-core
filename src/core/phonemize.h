@@ -1,12 +1,19 @@
 #pragma once
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "core/accentor.h"
 #include "core/stress_dictionary.h"
 
 namespace holos {
+
+// Наголос (U+0301) для тексту без фонемізації — рівно той самий шлях, що
+// використовує Phonemizer::phonemize (словник -> accentor для OOV/омонімів).
+// accentor може бути nullptr (тоді тільки словник).
+std::string stress_text(const StressDictionary& dict, const Accentor* accentor,
+                        std::string_view text);
 
 // Текст -> фонеми: split_to_parts -> normalize_part -> auto_stress (словник +
 // neural accentor fallback) -> ipa_uk.transcribe. Повертає фонемний рядок на частину.

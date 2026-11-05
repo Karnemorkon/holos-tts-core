@@ -1710,7 +1710,10 @@ int main() {
                 j["version"] = HOLOS_VERSION;
                 j["provider"] = "CPUExecutionProvider";
                 j["threads"] = g_engine.synth->intra_threads();
-                j["stress"] = "dictionary-A";
+                // Стратегія автонаголосу: словник (stress.trie) спершу, для
+                // OOV/неоднозначних омонімів — нейро accentor; слова без
+                // голосних і є/ґ-ініціальні пропускаються (як в апстрімі).
+                j["stress"] = "dictionary-accentor";
                 j["voices"] = (int)g_engine.voice_names.size();
                 j["cloning"] = g_engine.cloning_ready();
                 if (g_engine.synth->mode() == holos::SynthesizerMode::Bundle) {

@@ -67,7 +67,7 @@ curl -s http://localhost:8004/api/verbalize \
 
 ```bash
 curl -s http://localhost:8004/api/voices   # {"voices":[...],"custom":[...],"cloning":true}
-curl -s http://localhost:8004/healthz      # статус, version, провайдер, потоки, verbalizer, cloning,
+curl -s http://localhost:8004/healthz      # статус, version, провайдер, потоки, verbalizer, stress (dictionary-accentor), cloning,
                                            # model_format (bundle|legacy), sample_rate,
                                            # samples_per_frame, max_frames, streaming
 ```
