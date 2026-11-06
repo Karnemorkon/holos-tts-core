@@ -7,6 +7,7 @@ import base64
 import io
 import json
 import math
+import os
 import struct
 import sys
 import time
@@ -55,7 +56,10 @@ def wav_5s():
     return buf.getvalue()
 
 
-def wait_ready(timeout=300):
+READY_TIMEOUT = int(os.environ.get("SMOKE_READY_TIMEOUT", "300"))
+
+
+def wait_ready(timeout=READY_TIMEOUT):
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:

@@ -318,6 +318,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Reduce Defender scan overhead
+        shell: pwsh
+        run: |
+          # Real-time scanning of freshly restored model files slows down the
+          # first server start on a cold runner and can bust our smoke budgets.
+          try {
+            Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE" -ErrorAction Stop
+            Write-Host "Defender exclusion added: $env:GITHUB_WORKSPACE"
+          } catch {
+            Write-Host "Defender exclusion skipped: $_"
+          }
+
       - name: Cache vcpkg packages
         uses: actions/cache@v4
         with:
@@ -421,15 +433,20 @@ jobs:
           $proc = Start-Process -FilePath "$bundle\bin\holos-server.exe" -PassThru -NoNewWindow `
             -RedirectStandardOutput "$env:RUNNER_TEMP\holos.out" `
             -RedirectStandardError "$env:RUNNER_TEMP\holos.err"
-          # Wait for server to be ready (up to 120 seconds)
-          for ($_ = 1; $_ -le 120; $_++) {
+          # Readiness wait: fail fast if the process dies early, and give the
+          # server a long budget (Defender/model loading can be slow on a cold runner).
+          for ($_ = 1; $_ -le 180; $_++) {
+            if ($proc.HasExited) {
+              Get-Content "$env:RUNNER_TEMP\holos.out", "$env:RUNNER_TEMP\holos.err" -Tail 80 -ErrorAction SilentlyContinue
+              throw "holos-server exited early with code $($proc.ExitCode)"
+            }
             try {
               $resp = Invoke-RestMethod -Uri "http://127.0.0.1:8004/healthz" -Method Get -TimeoutSec 2 -ErrorAction Stop
               if ($resp.status -eq "ok") { break }
             } catch { }
             Start-Sleep 1
           }
-          
+          $env:SMOKE_READY_TIMEOUT = "900"
           try {
             python scripts/smoke_api.py http://127.0.0.1:8004 $version
             if ($LASTEXITCODE -ne 0) { throw "smoke failed ($LASTEXITCODE)" }
@@ -471,6 +488,18 @@ jobs:
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
+
+      - name: Reduce Defender scan overhead
+        shell: pwsh
+        run: |
+          # Real-time scanning of freshly restored model files slows down the
+          # first server start on a cold runner and can bust our smoke budgets.
+          try {
+            Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE" -ErrorAction Stop
+            Write-Host "Defender exclusion added: $env:GITHUB_WORKSPACE"
+          } catch {
+            Write-Host "Defender exclusion skipped: $_"
+          }
 
       - name: Cache vcpkg packages
         uses: actions/cache@v4
@@ -644,19 +673,27 @@ jobs:
           $errLog = Join-Path $env:RUNNER_TEMP "holos-installed.err"
           $proc = Start-Process -FilePath $server.FullName -WorkingDirectory $hostile -PassThru -NoNewWindow `
             -RedirectStandardOutput $outLog -RedirectStandardError $errLog
-          # Wait for server to be ready (up to 120 seconds)
-          for ($_ = 1; $_ -le 120; $_++) {
+          # Readiness wait: fail fast if the process dies early, and give the
+          # server a long budget (Defender/model loading can be slow on a cold runner).
+          for ($_ = 1; $_ -le 180; $_++) {
+            if ($proc.HasExited) {
+              Get-Content $outLog, $errLog -Tail 100 -ErrorAction SilentlyContinue
+              Get-Content (Join-Path $hostile "trantor.log") -Tail 100 -ErrorAction SilentlyContinue
+              throw "holos-server exited early with code $($proc.ExitCode)"
+            }
             try {
               $resp = Invoke-RestMethod -Uri "http://127.0.0.1:8004/healthz" -Method Get -TimeoutSec 2 -ErrorAction Stop
               if ($resp.status -eq "ok") { break }
             } catch { }
             Start-Sleep 1
           }
+          $env:SMOKE_READY_TIMEOUT = "900"
           try {
             & $python scripts/smoke_api.py http://127.0.0.1:8004 $version
             if ($LASTEXITCODE -ne 0) { throw "smoke failed ($LASTEXITCODE)" }
           } catch {
             Get-Content $outLog, $errLog -Tail 100 -ErrorAction SilentlyContinue
+            Get-Content (Join-Path $hostile "trantor.log") -Tail 100 -ErrorAction SilentlyContinue
             throw
           } finally {
             Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
