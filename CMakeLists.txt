@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(holos-tts-core VERSION 0.8.1 LANGUAGES CXX)
+project(holos-tts-core VERSION 0.8.3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 if(MSVC)

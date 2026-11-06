@@ -1,6 +1,6 @@
 [package]
 name = "holos-tts"
-version = "0.8.0"
+version = "0.8.3"
 edition = "2021"
 description = "HolosTTS desktop shell (український TTS)"
 
