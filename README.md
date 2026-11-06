@@ -10,8 +10,9 @@
 
 > **English summary:** production-ready Dockerized **Ukrainian text-to-speech** service
 > (REST + OpenAI-compatible + WebSocket + Web UI, port 8004) in **C++20 + ONNX Runtime** —
-> no Python at runtime. 27 voices, voice cloning, neural verbalization and stress;
-> multi-arch `linux/amd64` + `linux/arm64`. Current release: **0.7.1**.
+> no Python at runtime. 27 voices, voice cloning, neural verbalization, stress (98.4%
+> vs the author's pipeline), multi-speaker dialogue and English transliteration;
+> multi-arch `linux/amd64` + `linux/arm64`. Current release: **0.8.3**.
 
 Нативне C++ ядро українського синтезу мовлення: один бінарник + ONNX Runtime, без Python
 у рантаймі. Перший запуск довантажує моделі (~0.8 ГБ, багатоетапний бандл
@@ -36,6 +37,13 @@
   збігу з авторським конвеєром на 10,7 тис. токенів (див. docs/ARCHITECTURE.md).
 - **Потоковий синтез**: REST-стрім (`/v1/audio/speech`), WebSocket `/api/ws/synthesize`
   (PCM16-чанки) і вбудований Web UI.
+- **Діалоговий (мульти-спікер) синтез**: `POST /api/synthesize_dialogue` — кілька
+  сегментів з різними голосами й темпом, опційні `start_offset_ms` для поліфонії
+  (накладання голосів); у Web UI — вкладка «Діалог (мульти-спікер)» з редактором
+  сегментів, drag&drop та імпортом/експортом JSON. Діалог підтримує і WebSocket
+  (`{"dialogue": true, "segments": [...]}` + прогрес `phase:"segment"`).
+- **Транслітерація англійської**: англійські слова й абревіатури вимовляються
+  по-українськи (наприклад, `AI` → «Ей-Ай») — 188 пар правил із регресійними тестами.
 - **API-паритет з HolosTTS-hybrid**: та сама схема запитів/відповідей, тривалість аудіо Δ ≤0.02 с.
 - **Docker**: multi-arch образ ~290 МБ (amd64 + arm64), named volumes, healthcheck, ліміти CPU/RAM.
 - **Портативні збірки без Docker**: Linux x64 (AppImage з GUI, tar.gz) і Windows x64
@@ -53,7 +61,7 @@ curl http://localhost:8004/healthz
 ```
 
 Ознака готовності:
-`{"status":"ok","engine":"holos-tts-core-native","version":"0.7.1","verbalizer":"neural+rule","cloning":true,...}`.
+`{"status":"ok","engine":"holos-tts-core-native","version":"0.8.3","verbalizer":"neural+rule","stress":"dictionary-accentor","cloning":true,...}`.
 
 Потрібен Docker + Compose і ≥2 ГБ RAM (neural-дефолт тримає ~1.1 ГБ RSS; rule-only — ~468 МБ).
 Сервіс `downloader` завантажує лише відсутні файли, тож оновлення образу не тягне моделі заново.
@@ -71,10 +79,10 @@ curl -s -X POST http://localhost:8004/v1/audio/speech \
 
 Образ: [`morkon06/holostts-core`](https://hub.docker.com/r/morkon06/holostts-core) —
 multi-arch **linux/amd64 + linux/arm64**. Публікується лише з тегів `v*`:
-`0.7.1` (пін релізу) і `latest`. Тегів `sha-*` більше немає.
+`0.8.3` (пін релізу) і `latest`. Тегів `sha-*` більше немає.
 
 Образ **не містить моделей**. Найпростіше — compose з репозиторію: замініть у
-`docker-compose.yml` блок `build:` на `image: morkon06/holostts-core:0.7.1`, сервіс
+`docker-compose.yml` блок `build:` на `image: morkon06/holostts-core:0.8.3`, сервіс
 `downloader` довантажить моделі. Повний приклад, ліміти й альтернативи —
 [docs/CONFIGURATION.md](docs/CONFIGURATION.md#docker-hub).
 

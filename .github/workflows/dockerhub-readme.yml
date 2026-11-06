@@ -1,0 +1,35 @@
+name: Docker Hub README
+
+# Синхронізує dockerhub/overview.md з описом репозиторію на Docker Hub.
+# Окремо від docker.yml, щоб оновлення опису не чекало на наступний тег.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - dockerhub/overview.md
+      - .github/workflows/dockerhub-readme.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: morkon06/holostts-core
+
+jobs:
+  sync:
+    name: sync overview
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync Docker Hub overview
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.IMAGE }}
+          short-description: "Ukrainian TTS in C++20: 27 voices, cloning, dialogue, stress, REST/OpenAI/WS"
+          readme-filepath: ./dockerhub/overview.md

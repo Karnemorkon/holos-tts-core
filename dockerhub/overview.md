@@ -7,8 +7,8 @@
 
 Production-ready **Ukrainian text-to-speech** service in a single container:
 **C++20 + ONNX Runtime**, no Python and no PyTorch at runtime. REST API,
-OpenAI-compatible endpoint, WebSocket streaming and a built-in Web UI with **voice cloning**.
-Current release: **0.7.1**.
+OpenAI-compatible endpoint, WebSocket streaming and a built-in Web UI with **voice cloning**,
+**multi-speaker dialogue** and **English transliteration**. Current release: **0.8.3**.
 
 > **Disclaimer:** independent community project, not an official product of the original
 > neural network author ([patriotyk](https://github.com/patriotyk)). Model weights are
@@ -20,8 +20,12 @@ Current release: **0.7.1**.
 - **Voice cloning** from a WAV sample (ONNX voice encoder)
 - **INT8 ONNX generator** on CPU — no GPU required, x86-64 and ARM64
 - **Automatic verbalization**: Gemma-3-270M int8 (`neural`, default), C++ rules (`rule`), or `off`
-- **Stress accentuation**: marisa-trie dictionary (2.9M word forms) + accentor-lite ONNX for OOV
+- **Stress accentuation**: marisa-trie dictionary (2.9M word forms) + accentor-lite ONNX for OOV —
+  **98.4% stress accuracy** vs the author's pipeline
 - **Streaming**: OpenAI-style chunked response and WebSocket (`/api/ws/synthesize`)
+- **Multi-speaker dialogue**: `POST /api/synthesize_dialogue` — per-segment voices, speed and
+  optional overlap offsets (polyphony); dialog editor in the Web UI
+- **English transliteration**: English words and acronyms are pronounced in Ukrainian
 - **API parity** with [HolosTTS-hybrid](https://github.com/Karnemorkon/HolosTTS-hybrid)
 - Multi-arch image: `linux/amd64`, `linux/arm64`; ~290 MB
 - ~1.1 GB RAM with neural verbalizer (~470 MB in `rule` mode)
@@ -35,7 +39,7 @@ the model-downloader script, then use the published image instead of building:
 git clone https://github.com/Karnemorkon/holos-tts-core.git
 cd holos-tts-core
 # in docker-compose.yml replace the `build:` block with:
-#   image: morkon06/holostts-core:0.7.1
+#   image: morkon06/holostts-core:0.8.3
 docker compose up -d
 ```
 
@@ -44,7 +48,7 @@ Minimal compose (the full version with resource limits and healthcheck is in the
 ```yaml
 services:
   holos-core:
-    image: morkon06/holostts-core:0.7.1
+    image: morkon06/holostts-core:0.8.3
     container_name: holos-core
     ports:
       - "8004:8004"
@@ -84,7 +88,7 @@ subsequent starts skip existing files. Then open **http://localhost:8004/** and 
 
 ```bash
 curl http://localhost:8004/healthz
-# {"status":"ok","engine":"holos-tts-core-native","version":"0.7.1","cloning":true,...}
+# {"status":"ok","engine":"holos-tts-core-native","version":"0.8.3","cloning":true,...}
 ```
 
 ## Web UI and voice cloning
@@ -115,6 +119,16 @@ curl -X POST http://localhost:8004/api/synthesize \
 # -> JSON with duration_sec, verbalized_text and audio_base64 (WAV)
 ```
 
+Multi-speaker dialogue:
+
+```bash
+curl -X POST http://localhost:8004/api/synthesize_dialogue \
+  -H 'Content-Type: application/json' \
+  -d '{"segments":[{"text":"Привіт, я Олена.","voice":"Speaker_0"},
+                   {"text":"Привіт, я Іван.","voice":"Speaker_1","start_offset_ms":1200}]}'
+# -> JSON with per-segment offsets and a mixed audio_base64 (WAV)
+```
+
 OpenAI-compatible endpoint:
 
 ```bash
@@ -139,14 +153,14 @@ WebSocket: `/api/ws/synthesize` (PCM16 chunks). No authentication.
 | `HOLOS_THREADS` | `0` | ONNX threads, `0` = 80% of available cores (cgroup quota aware) |
 | `HOLOS_METRICS` | `0` | Per-request timings in logs/responses |
 
-> The 0.7.1 image's default `HOLOS_VERBALIZER_DIR` points to the legacy M2M100
+> The image's default `HOLOS_VERBALIZER_DIR` points to the legacy M2M100
 > directory; if those files are absent the server falls back to `rule`. The compose
 > file above sets `gemma-int8`, the recommended mode.
 
 ## Image tags
 
 - `latest` — latest release
-- `0.7.1` — pinned release
+- `0.8.3` — pinned release
 - Published only from `v*` tags; there are no `sha-*` tags.
 - Both tags are multi-arch manifests (`linux/amd64` + `linux/arm64`); the ARM64 image
   passes a runtime smoke test (healthz, synthesis, clone) before publication.
