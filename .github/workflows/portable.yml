@@ -609,14 +609,19 @@ jobs:
       - name: Build NSIS installer
         working-directory: desktop/tauri
         shell: pwsh
-        run: npx tauri build
+        run: |
+          # The cargo cache can contain installers from earlier runs; drop them
+          # so verification can never pick a stale artifact.
+          Get-ChildItem src-tauri\target -Recurse -Filter '*-setup.exe' -ErrorAction SilentlyContinue |
+            Remove-Item -Force
+          npx tauri build
 
       - name: Verify installer layout and runtime
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $installer = Get-ChildItem desktop\tauri\src-tauri\target -Recurse -Filter '*-setup.exe' |
-            Select-Object -First 1
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $installer) { throw "NSIS installer not found" }
 
           $sevenZip = "C:\Program Files\7-Zip\7z.exe"
@@ -706,7 +711,7 @@ jobs:
           $version = & "dist\holos-tts-core\bin\holos-cli.exe" version
           if (-not $version) { throw "version missing" }
           $installer = Get-ChildItem desktop\tauri\src-tauri\target -Recurse -Filter '*-setup.exe' |
-            Select-Object -First 1
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $installer) { throw "NSIS installer not found" }
           Copy-Item $installer.FullName "holos-tts-core-$version-windows-x64-setup.exe"
           Get-Item "holos-tts-core-*-windows-x64-setup.exe" | Format-List Name, Length
