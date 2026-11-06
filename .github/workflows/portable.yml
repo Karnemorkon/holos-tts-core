@@ -438,12 +438,20 @@ jobs:
           for ($_ = 1; $_ -le 180; $_++) {
             if ($proc.HasExited) {
               Get-Content "$env:RUNNER_TEMP\holos.out", "$env:RUNNER_TEMP\holos.err" -Tail 80 -ErrorAction SilentlyContinue
-              throw "holos-server exited early with code $($proc.ExitCode)"
+              Get-Content "$PWD\trantor.log" -Tail 80 -ErrorAction SilentlyContinue
+              # Crash diagnostics: faulting module from the Application event log
+              # (0xC0000005 is the exception code, not the failing component).
+              Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000,1001; StartTime=(Get-Date).AddMinutes(-15)} -ErrorAction SilentlyContinue |
+                Where-Object { $_.Message -match 'holos' } |
+                Select-Object -First 3 | ForEach-Object { $_.Message }
+              Get-ChildItem "$env:GITHUB_WORKSPACE\.model-cache" -Recurse -File -ErrorAction SilentlyContinue |
+                ForEach-Object { "{0}  {1}" -f $_.Length, $_.FullName }
+              throw "holos-server exited early with code $($proc.ExitCode) at readiness iteration $_; last healthz error: $script:lastHealthzErr"
             }
             try {
               $resp = Invoke-RestMethod -Uri "http://127.0.0.1:8004/healthz" -Method Get -TimeoutSec 2 -ErrorAction Stop
               if ($resp.status -eq "ok") { break }
-            } catch { }
+            } catch { $script:lastHealthzErr = $_.Exception.Message }
             Start-Sleep 1
           }
           $env:SMOKE_READY_TIMEOUT = "900"
@@ -684,12 +692,17 @@ jobs:
             if ($proc.HasExited) {
               Get-Content $outLog, $errLog -Tail 100 -ErrorAction SilentlyContinue
               Get-Content (Join-Path $hostile "trantor.log") -Tail 100 -ErrorAction SilentlyContinue
-              throw "holos-server exited early with code $($proc.ExitCode)"
+              # Crash diagnostics: faulting module from the Application event log
+              # (0xC0000005 is the exception code, not the failing component).
+              Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000,1001; StartTime=(Get-Date).AddMinutes(-15)} -ErrorAction SilentlyContinue |
+                Where-Object { $_.Message -match 'holos' } |
+                Select-Object -First 3 | ForEach-Object { $_.Message }
+              throw "holos-server exited early with code $($proc.ExitCode) at readiness iteration $_; last healthz error: $script:lastHealthzErr"
             }
             try {
               $resp = Invoke-RestMethod -Uri "http://127.0.0.1:8004/healthz" -Method Get -TimeoutSec 2 -ErrorAction Stop
               if ($resp.status -eq "ok") { break }
-            } catch { }
+            } catch { $script:lastHealthzErr = $_.Exception.Message }
             Start-Sleep 1
           }
           $env:SMOKE_READY_TIMEOUT = "900"
