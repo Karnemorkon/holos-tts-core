@@ -23,8 +23,8 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <cstdlib>
 #include <functional>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -260,6 +260,38 @@ struct Engine {
         return all;
     }
 
+    // Внутрішній синтез однієї фонемної частини (без infer_mu, з рекурсивним розбиттям при перевищенні max_frames).
+    // Для HTTP-шляху використовуємо не-стрімінговий generate (простіше, надійніше на великих текстах).
+    // Стрімінг (generate_stream) залишаємо для WebSocket-шляху.
+    std::vector<float> synth_part_pcm_impl(const std::string& phonemes, const std::string& voice,
+                                           float speed) {
+        const auto v = voice_embedding(voice);
+        std::vector<float> audio;
+        try {
+            auto ids = tokenizer(phonemes);
+            audio = synth->generate(ids, v.data(), speed);
+        } catch (const std::runtime_error& e) {
+            std::string msg = e.what();
+            if (msg.find("predicted frames exceed max_frames") != std::string::npos
+                && phonemes.size() > 4) {
+                // Розбиваємо навпіл (на пробілі) і рекурсивно syntezтимо кожну частину.
+                size_t mid = phonemes.size() / 2;
+                size_t split = phonemes.find_last_of(' ', mid);
+                if (split == std::string::npos || split == 0)
+                    split = phonemes.find_first_of(' ', mid);
+                if (split == std::string::npos)
+                    split = mid;
+                auto left = synth_part_pcm_impl(phonemes.substr(0, split), voice, speed);
+                auto right = synth_part_pcm_impl(phonemes.substr(split + 1), voice, speed);
+                audio.insert(audio.end(), left.begin(), left.end());
+                audio.insert(audio.end(), right.begin(), right.end());
+            } else {
+                throw;
+            }
+        }
+        return audio;
+    }
+
     std::vector<std::string> phonemize(const std::string& text, bool raw_stress) {
         std::lock_guard<std::mutex> lk(infer_mu);
         return phonemizer->phonemize(text, raw_stress);
@@ -287,7 +319,7 @@ struct Engine {
             double ort = 0.0;
             for (const auto& p : parts) {
                 auto t_ort = Clock::now();
-                auto chunk = synth->generate(tokenizer(p), v.data(), speed);
+                auto chunk = synth_part_pcm_impl(p, voice, speed);
                 ort += ms_since(t_ort);
                 audio.insert(audio.end(), chunk.begin(), chunk.end());
             }
@@ -296,12 +328,11 @@ struct Engine {
         return holos::float_to_pcm16(audio);
     }
 
-    // Одна фонемна частина -> float аudio (для стрімінгу; per-chunk нормалізація).
     std::vector<int16_t> synth_part_pcm(const std::string& phonemes, const std::string& voice,
                                         float speed) {
         const auto v = voice_embedding(voice);
         std::lock_guard<std::mutex> lk(infer_mu);
-        auto audio = synth->generate(tokenizer(phonemes), v.data(), speed);
+        auto audio = synth_part_pcm_impl(phonemes, voice, speed);
         return holos::float_to_pcm16(audio);
     }
 };
