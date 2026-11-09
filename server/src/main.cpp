@@ -417,15 +417,22 @@ double synth_stream_send(const std::string& text, const std::string& voice, floa
         (g_engine.synth->mode() == holos::SynthesizerMode::Bundle)
         && g_engine.synth->is_streaming_supported();
     std::vector<int16_t> pcm;
-    for (int i = 0; i < total; ++i) {
-        if (stopped()) { stopped_flag = true; break; }
-        auto t_ort = Clock::now();
-        if (use_stream) {
-            const auto& voice_emb = g_engine.voice_embedding(voice);
-            auto ids = g_engine.tokenizer(parts[i]);
-            bool ok = g_engine.synth->generate_stream(
+    std::vector<float> voice_emb;
+    if (use_stream) voice_emb = g_engine.voice_embedding(voice);
+
+    // Одна фонемна частина -> стрім PCM-чанків. Якщо передбачена тривалість
+    // перевищує max_frames, рекурсивно ділимо частину навпіл (Issue #8:
+    // GUI/десктоп синтезує саме через WS, тому обробка потрібна і тут).
+    std::function<bool(const std::string&, int)> stream_part =
+        [&](const std::string& phonemes, int depth) -> bool {
+        if (stopped()) return false;
+        try {
+            std::lock_guard<std::mutex> lk(g_engine.infer_mu);
+            auto ids = g_engine.tokenizer(phonemes);
+            return g_engine.synth->generate_stream(
                 ids, voice_emb.data(), speed, holos::StreamingConfig{},
                 [&](const std::vector<float>& chunk) -> bool {
+                    if (stopped()) return false;
                     pcm = holos::float_to_pcm16(chunk);
                     duration += (double)pcm.size() / holos::kSampleRate;
                     if (first) {
@@ -434,7 +441,29 @@ double synth_stream_send(const std::string& text, const std::string& voice, floa
                     }
                     return send_chunk(pcm.data(), pcm.size());
                 });
-            if (!ok) { stopped_flag = true; break; }
+        } catch (const std::runtime_error& e) {
+            const std::string msg = e.what();
+            if (msg.find("predicted frames exceed max_frames") == std::string::npos
+                || phonemes.size() <= 4 || depth >= 24) {
+                throw;
+            }
+            size_t mid = phonemes.size() / 2;
+            size_t split = phonemes.find_last_of(' ', mid);
+            if (split == std::string::npos || split == 0)
+                split = phonemes.find_first_of(' ', mid);
+            if (split == std::string::npos || split == 0 ||
+                split + 1 >= phonemes.size())
+                split = mid;
+            if (!stream_part(phonemes.substr(0, split), depth + 1)) return false;
+            return stream_part(phonemes.substr(split + 1), depth + 1);
+        }
+    };
+
+    for (int i = 0; i < total; ++i) {
+        if (stopped()) { stopped_flag = true; break; }
+        auto t_ort = Clock::now();
+        if (use_stream) {
+            if (!stream_part(parts[i], 0)) { stopped_flag = true; break; }
         } else {
             auto pcm_chunk = g_engine.synth_part_pcm(parts[i], voice, speed);
             duration += (double)pcm_chunk.size() / holos::kSampleRate;
@@ -987,18 +1016,24 @@ public:
             Timings tm;
             bool cancelled = false;
             auto send_chunk = [&conn](const int16_t* pcm, size_t n) {
-                std::string bytes(reinterpret_cast<const char*>(pcm), n * 2);
-                conn->send(bytes, drogon::WebSocketMessageType::Binary);
-                return true;
+                try {
+                    std::string bytes(reinterpret_cast<const char*>(pcm), n * 2);
+                    conn->send(bytes, drogon::WebSocketMessageType::Binary);
+                    return true;
+                } catch (...) {
+                    return false; // клієнт уже відключився
+                }
             };
             auto progress = [&conn](const std::string& phase, int cur, int total) {
-                Json::Value p;
-                p["phase"] = phase;
-                if (phase == "synth") { p["current"] = cur; p["total"] = total; }
-                Json::Value msg;
-                msg["progress"] = p;
-                conn->send(Json::writeString(Json::StreamWriterBuilder(), msg),
-                           drogon::WebSocketMessageType::Text);
+                try {
+                    Json::Value p;
+                    p["phase"] = phase;
+                    if (phase == "synth") { p["current"] = cur; p["total"] = total; }
+                    Json::Value msg;
+                    msg["progress"] = p;
+                    conn->send(Json::writeString(Json::StreamWriterBuilder(), msg),
+                               drogon::WebSocketMessageType::Text);
+                } catch (...) {}
             };
             try {
                 double duration = 0.0;
@@ -1043,11 +1078,22 @@ public:
                 conn->send(Json::writeString(Json::StreamWriterBuilder(), fin),
                            drogon::WebSocketMessageType::Text);
             } catch (const std::exception& e) {
-                Json::Value er; er["error"] = e.what();
-                conn->send(Json::writeString(Json::StreamWriterBuilder(), er),
-                           drogon::WebSocketMessageType::Text);
+                try {
+                    Json::Value er; er["error"] = e.what();
+                    conn->send(Json::writeString(Json::StreamWriterBuilder(), er),
+                               drogon::WebSocketMessageType::Text);
+                } catch (...) {
+                    // клієнт відключився — не даємо винятку вбити процес
+                }
+            } catch (...) {
+                try {
+                    Json::Value er; er["error"] = "internal server error";
+                    conn->send(Json::writeString(Json::StreamWriterBuilder(), er),
+                               drogon::WebSocketMessageType::Text);
+                } catch (...) {}
             }
-            conn->shutdown(); // graceful: дописати буфер (фінальний JSON/чанки) перед закриттям
+            try { conn->shutdown(); } catch (...) {}
+            // graceful: дописати буфер (фінальний JSON/чанки) перед закриттям
         }).detach();
     }
 
