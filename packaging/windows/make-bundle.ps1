@@ -18,6 +18,13 @@ Copy-Item "$Here\download-models.ps1" $Prefix
 Copy-Item "$Here\README.txt" $Prefix
 New-Item -ItemType Directory -Force -Path (Join-Path $Prefix "models"), (Join-Path $Prefix "speakers") | Out-Null
 
+# Шаблон словника користувача (щоб файл пояснював, як додавати наголоси).
+# Не перезаписуємо, якщо вже є (збереження правок при перезбиранні).
+$userStress = Join-Path $Prefix "models\stress_user.txt"
+if (-not (Test-Path $userStress)) {
+    Copy-Item (Join-Path (Split-Path -Parent $Here) "stress_user.txt") $userStress
+}
+
 if ($OrtBin) {
     $dlls = @(Get-ChildItem -Path $OrtBin -Filter "onnxruntime*.dll" -ErrorAction SilentlyContinue)
     if (-not $dlls) { throw "onnxruntime dll not found in $OrtBin" }

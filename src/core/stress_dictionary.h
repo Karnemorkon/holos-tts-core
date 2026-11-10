@@ -12,16 +12,26 @@ namespace holos {
 // запис без тегів (займенник/службове слово) — наголос береться зі словника;
 // інакше слово повертається БЕЗ наголосу (Python on_ambiguity=Skip) і його
 // обробляє accentor. Апострофи ʼ/’ згортаються до ASCII-апострофа словника.
+//
+// Опційно завантажується словник користувача (текстовий файл, див. stress_user.txt):
+// рядки на кшталт «ка+ва» («+» після наголошеної голосної), коментарі «#».
+// Записи користувача мають ПЕРЕВАГУ над stress.trie — можна виправляти
+// невірні наголоси основного словника без перезбірки trie.
 class StressDictionary {
 public:
-    // Завантажує stress.trie (marisa BytesTrie від ukrainian-word-stress).
-    explicit StressDictionary(const std::string& trie_path);
+    // Завантажує stress.trie (marisa BytesTrie від ukrainian-word-stress) та,
+    // за наявності, словник користувача user_path (порожній рядок = без нього).
+    explicit StressDictionary(const std::string& trie_path,
+                              const std::string& user_path = "");
     ~StressDictionary();
     StressDictionary(const StressDictionary&) = delete;
     StressDictionary& operator=(const StressDictionary&) = delete;
 
     bool loaded() const;
     size_t size() const; // кількість ключів
+
+    // Кількість слів у словнику користувача (0 = файл не завантажено).
+    size_t user_size() const;
 
     // Повертає слово з вставленим U+0301 (комбінуючим наголосом) або ж саме слово,
     // якщо наголос не визначено (однозначний пропуск / OOV / неоднозначність).
@@ -42,6 +52,10 @@ public:
 private:
     struct Impl;
     Impl* impl_;
+
+    // Пошук у словнику користувача (ключ: lower + згорнуті апострофи);
+    // nullptr = слова немає. Вказівник дійсний, поки не змінюється impl_.
+    const std::vector<int>* user_find(std::string_view word) const;
 };
 
 } // namespace holos

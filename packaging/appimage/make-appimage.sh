@@ -51,6 +51,10 @@ cp -a "$BUNDLE/bin/." "$APPDIR/usr/bin/"
 cp -a "$BUNDLE/lib/." "$APPDIR/usr/lib/"
 cp -a "$MODELS/." "$APPDIR/usr/share/holos-tts/models/"
 find "$APPDIR/usr/share/holos-tts/models" -type f -name '*.part' -delete
+# Шаблон словника користувача (у AppImage моделі read-only; AppRun копіює
+# його у DATA_DIR при першому запуску).
+[ -f "$APPDIR/usr/share/holos-tts/models/stress_user.txt" ] || \
+    cp "$REPO_ROOT/packaging/stress_user.txt" "$APPDIR/usr/share/holos-tts/models/stress_user.txt"
 
 cp "$HERE/AppRun" "$APPDIR/AppRun"
 chmod +x "$APPDIR/AppRun"

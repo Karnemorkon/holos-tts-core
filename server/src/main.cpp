@@ -175,6 +175,34 @@ std::string apply_verbalize(VbMode m, const std::string& text) {
     }
 }
 
+// Тиша між частинами синтезу (сек): гарантована пауза між реченнями навіть
+// там, де модель сама не поставила паузу (Issue #8: «злиття» речень).
+constexpr double kGapSec = 0.3;
+
+// Точка рекурсивного розриву частини, що перевищує max_frames (Issue #8).
+// Спочатку — межа речення (".!? " перед/після середини), щоб не ламати
+// пунктуацію; інакше — найближчий пробіл; інакше — середина рядка.
+// Повертає індекс пробілу для розриву; at_sentence — чи розрив на межі речення.
+size_t find_long_part_split(const std::string& s, bool* at_sentence = nullptr) {
+    auto set_flag = [&](bool v) { if (at_sentence) *at_sentence = v; };
+    auto sentence_space = [&](size_t i) {
+        return i > 0 && s[i] == ' ' &&
+               (s[i - 1] == '.' || s[i - 1] == '!' || s[i - 1] == '?');
+    };
+    const size_t mid = s.size() / 2;
+    for (size_t i = mid; i > 0; --i)
+        if (sentence_space(i)) { set_flag(true); return i; }
+    for (size_t i = mid + 1; i + 1 < s.size(); ++i)
+        if (sentence_space(i)) { set_flag(true); return i; }
+    set_flag(false);
+    size_t split = s.find_last_of(' ', mid);
+    if (split == std::string::npos || split == 0)
+        split = s.find_first_of(' ', mid);
+    if (split == std::string::npos || split == 0 || split + 1 >= s.size())
+        split = mid;
+    return split;
+}
+
 // Глобальний движок (завантажується один раз при старті).
 struct Engine {
     std::unique_ptr<holos::Phonemizer> phonemizer;
@@ -193,6 +221,8 @@ struct Engine {
               const std::string& speakers_dir, int threads,
               holos::SynthesizerMode mode = holos::SynthesizerMode::Auto) {
         phonemizer = std::make_unique<holos::Phonemizer>(trie, accentor);
+        if (size_t n = phonemizer->user_stress_size(); n > 0)
+            LOG_INFO << "словник користувача: " << n << " слів (stress_user.txt)";
         synth = std::make_unique<holos::Synthesizer>(onnx, threads, mode);
         // Бандл holos-onnx несе власні голоси (voices.npz) і фонемний словник
         // (vocab у маніфесті). Legacy voices.json/vocab.json з ним несумісні:
@@ -274,16 +304,16 @@ struct Engine {
             std::string msg = e.what();
             if (msg.find("predicted frames exceed max_frames") != std::string::npos
                 && phonemes.size() > 4) {
-                // Розбиваємо навпіл (на пробілі) і рекурсивно syntezтимо кожну частину.
-                size_t mid = phonemes.size() / 2;
-                size_t split = phonemes.find_last_of(' ', mid);
-                if (split == std::string::npos || split == 0)
-                    split = phonemes.find_first_of(' ', mid);
-                if (split == std::string::npos)
-                    split = mid;
+                // Розриваємо на межі речення (щоб не ламати пунктуацію) і
+                // рекурсивно синтезуємо кожну частину; між реченнями — тиша.
+                bool at_sentence = false;
+                size_t split = find_long_part_split(phonemes, &at_sentence);
                 auto left = synth_part_pcm_impl(phonemes.substr(0, split), voice, speed);
                 auto right = synth_part_pcm_impl(phonemes.substr(split + 1), voice, speed);
                 audio.insert(audio.end(), left.begin(), left.end());
+                if (at_sentence)
+                    audio.insert(audio.end(),
+                                 static_cast<size_t>(kGapSec * holos::kSampleRate), 0.f);
                 audio.insert(audio.end(), right.begin(), right.end());
             } else {
                 throw;
@@ -317,10 +347,17 @@ struct Engine {
             auto parts = phonemizer->phonemize(t, raw_stress);
             if (tm) { tm->phon_ms = ms_since(t_phon); tm->parts = (int)parts.size(); }
             double ort = 0.0;
+            bool first_part = true;
             for (const auto& p : parts) {
                 auto t_ort = Clock::now();
                 auto chunk = synth_part_pcm_impl(p, voice, speed);
                 ort += ms_since(t_ort);
+                // Тиша між реченнями (частинами) — пауза навіть тоді, коли
+                // модель не поставила її сама.
+                if (!first_part)
+                    audio.insert(audio.end(),
+                                 static_cast<size_t>(kGapSec * holos::kSampleRate), 0.f);
+                first_part = false;
                 audio.insert(audio.end(), chunk.begin(), chunk.end());
             }
             if (tm) tm->ort_ms = ort;
@@ -447,20 +484,27 @@ double synth_stream_send(const std::string& text, const std::string& voice, floa
                 || phonemes.size() <= 4 || depth >= 24) {
                 throw;
             }
-            size_t mid = phonemes.size() / 2;
-            size_t split = phonemes.find_last_of(' ', mid);
-            if (split == std::string::npos || split == 0)
-                split = phonemes.find_first_of(' ', mid);
-            if (split == std::string::npos || split == 0 ||
-                split + 1 >= phonemes.size())
-                split = mid;
+            // Розрив на межі речення (не ламаємо пунктуацію); між реченнями — тиша.
+            bool at_sentence = false;
+            size_t split = find_long_part_split(phonemes, &at_sentence);
             if (!stream_part(phonemes.substr(0, split), depth + 1)) return false;
+            if (at_sentence) {
+                std::vector<int16_t> gap(static_cast<size_t>(kGapSec * holos::kSampleRate), 0);
+                duration += (double)gap.size() / holos::kSampleRate;
+                if (!send_chunk(gap.data(), gap.size())) return false;
+            }
             return stream_part(phonemes.substr(split + 1), depth + 1);
         }
     };
 
     for (int i = 0; i < total; ++i) {
         if (stopped()) { stopped_flag = true; break; }
+        // Тиша між реченнями (частинами) після першої відправленої частини.
+        if (!first) {
+            std::vector<int16_t> gap(static_cast<size_t>(kGapSec * holos::kSampleRate), 0);
+            duration += (double)gap.size() / holos::kSampleRate;
+            if (!send_chunk(gap.data(), gap.size())) { stopped_flag = true; break; }
+        }
         auto t_ort = Clock::now();
         if (use_stream) {
             if (!stream_part(parts[i], 0)) { stopped_flag = true; break; }

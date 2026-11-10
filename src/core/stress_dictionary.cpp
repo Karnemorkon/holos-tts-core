@@ -1,4 +1,5 @@
 #include "stress_dictionary.h"
+#include "text_prep.h"
 #include "utf8.h"
 
 #include <marisa/trie.h>
@@ -7,7 +8,9 @@
 #include <utf8proc.h>
 
 #include <algorithm>
+#include <fstream>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace holos {
 
@@ -176,38 +179,113 @@ bool find_payload(const marisa::Trie& trie, std::string_view word, Payload& out)
     return false;
 }
 
+// Обрізка пробілів по краях рядка.
+std::string trim(std::string_view s) {
+    size_t b = s.find_first_not_of(" \t\r");
+    if (b == std::string_view::npos) return "";
+    size_t e = s.find_last_not_of(" \t\r");
+    return std::string(s.substr(b, e - b + 1));
+}
+
+// Ключ словника користувача: без U+0301, згорнуті апострофи, lowercase —
+// щоб збігався з пошуком у stress.trie (lower/title/апострофи).
+std::string user_key(std::string_view stressed_word) {
+    std::string bare;
+    bare.reserve(stressed_word.size());
+    size_t i = 0;
+    while (i < stressed_word.size()) {
+        size_t start = i;
+        utf8proc_int32_t cp = 0;
+        auto n = utf8proc_iterate(reinterpret_cast<const utf8proc_uint8_t*>(stressed_word.data()) + i,
+                                  static_cast<utf8proc_ssize_t>(stressed_word.size() - i), &cp);
+        if (n <= 0) { bare.push_back(stressed_word[i]); ++i; continue; }
+        if (cp != 0x0301) bare.append(stressed_word.substr(start, static_cast<size_t>(n)));
+        i += static_cast<size_t>(n);
+    }
+    return unicode_lower(fold_apostrophes(bare));
+}
+
+// Завантаження словника користувача (текстовий файл): один запис на рядок
+// у форматі «слово+» ('+' після голосної, на якій наголос) або слово з уже
+// вставленим U+0301. Рядки з '#' (коментарі) та порожні — ігноруються;
+// запис без позначки наголосу пропускається.
+void load_user_file(const std::string& path,
+                    std::unordered_map<std::string, std::vector<int>>& out) {
+    std::ifstream f(path);
+    if (!f) return;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (size_t h = line.find('#'); h != std::string::npos) line.erase(h);
+        std::string token = trim(line);
+        if (token.empty()) continue;
+        if (token.find_first_of(" \t") != std::string::npos) continue; // одне слово на рядок
+        // '+' -> U+0301 (та сама «прощаюча» обробка, що й у тексті).
+        std::string stressed = TextPrep::apply_stress_markup(token);
+        // Позиція наголосу = codepoint-індекс U+0301 — та сама конвенція, що в trie
+        // (stress_at вставляє U+0301 ПЕРЕД цією позицією, тобто одразу після голосного).
+        int pos = -1;
+        size_t i = 0;
+        int cp_idx = 0;
+        while (i < stressed.size()) {
+            utf8proc_int32_t cp = 0;
+            auto n = utf8proc_iterate(reinterpret_cast<const utf8proc_uint8_t*>(stressed.data()) + i,
+                                      static_cast<utf8proc_ssize_t>(stressed.size() - i), &cp);
+            if (n <= 0) { ++i; ++cp_idx; continue; }
+            if (cp == 0x0301) { pos = cp_idx; break; }
+            i += static_cast<size_t>(n);
+            ++cp_idx;
+        }
+        if (pos < 0) continue; // без наголосу — не додаємо
+        out[user_key(stressed)] = {pos};
+    }
+}
+
 } // namespace
 
 struct StressDictionary::Impl {
     marisa::Trie trie;
+    // Словник користувача (stress_user.txt): ключ = lower+апострофи, значення =
+    // codepoint-позиції наголосу (конвенція як у trie). Перевіряється ПЕРЕД trie.
+    std::unordered_map<std::string, std::vector<int>> user;
 };
 
-StressDictionary::StressDictionary(const std::string& trie_path) : impl_(new Impl) {
+StressDictionary::StressDictionary(const std::string& trie_path,
+                                   const std::string& user_path) : impl_(new Impl) {
     try {
         impl_->trie.load(trie_path.c_str());
     } catch (const std::exception& e) {
         delete impl_; impl_ = nullptr;
         throw std::runtime_error("Не вдалося завантажити stress.trie: " + std::string(e.what()));
     }
+    if (!user_path.empty()) load_user_file(user_path, impl_->user);
 }
 
 StressDictionary::~StressDictionary() { delete impl_; }
 
 bool StressDictionary::loaded() const { return impl_ && impl_->trie.num_keys() > 0; }
 size_t StressDictionary::size() const { return impl_ ? impl_->trie.num_keys() : 0; }
+size_t StressDictionary::user_size() const { return impl_ ? impl_->user.size() : 0; }
+
+const std::vector<int>* StressDictionary::user_find(std::string_view word) const {
+    if (!impl_ || impl_->user.empty() || word.empty()) return nullptr;
+    auto it = impl_->user.find(unicode_lower(fold_apostrophes(word)));
+    return it == impl_->user.end() ? nullptr : &it->second;
+}
 
 std::vector<std::vector<int>> StressDictionary::accent_variants(std::string_view word) const {
     if (!impl_) return {};
-    Payload p;
-    if (!find_payload(impl_->trie, word, p)) return {};
-    return p.variants;
+    if (const auto* p = user_find(word)) return {*p}; // словник користувача: один запис
+    Payload p2;
+    if (!find_payload(impl_->trie, word, p2)) return {};
+    return p2.variants;
 }
 
 std::vector<int> StressDictionary::accent_positions(std::string_view word) const {
     if (!impl_) return {};
-    Payload p;
-    if (!find_payload(impl_->trie, word, p)) return {};
-    return p.chosen;
+    if (const auto* p = user_find(word)) return *p; // пріоритет користувача
+    Payload p2;
+    if (!find_payload(impl_->trie, word, p2)) return {};
+    return p2.chosen;
 }
 
 std::string StressDictionary::stress_at(std::string_view word,

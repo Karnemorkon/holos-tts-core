@@ -1,3 +1,5 @@
+#include <cstdio>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <sys/stat.h>
@@ -100,6 +102,30 @@ void test_dictionary(const std::string& trie_path) {
     // stress_at: порожні позиції -> слово без змін; довільні позиції -> вставка.
     check(dict.stress_at("вода", {}) == "вода", "stress_at(вода,{}) == вода");
     check(dict.stress_at("вода", {2}) == acute_at("вода", 2), "stress_at(вода,{2})");
+
+    // Словник користувача (stress_user.txt): формат «слово+», коментарі '#',
+    // слова без '+' ігноруються, записи мають перевагу над trie.
+    {
+        const std::string upath = "stress_user_test.tmp.txt";
+        {
+            std::ofstream uf(upath);
+            uf << "# коментар\n"
+                  "вода+\n"
+                  "к+ава\n"
+                  "блаблабла+\n"
+                  "без_наголосу\n";
+        }
+        holos::StressDictionary udict(trie_path, upath);
+        check(udict.user_size() == 3, "user dict: 3 валідних записів (4-й без '+')");
+        check(udict.accent_positions("вода") == std::vector<int>{4}, "user: вода == {4}");
+        check(udict.accent_positions("кава") == std::vector<int>{2}, "user: кава == {2} (к+ава)");
+        check(udict.accent_positions("Кава") == std::vector<int>{2}, "user: Кава (регістр)");
+        check(udict.accent_positions("блаблабла") == std::vector<int>{9}, "user: OOV з наголосом");
+        check(udict.stress("кава") == acute_at("кава", 2), "user: stress(кава) == кáва");
+        check(udict.accent_positions("галузі").empty(),
+              "user: слово без запису -> як у trie (омонім порожній)");
+        std::remove(upath.c_str());
+    }
 }
 
 } // namespace

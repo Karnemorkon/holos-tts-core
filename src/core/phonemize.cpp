@@ -4,6 +4,8 @@
 #include "core/ipa_uk.h"
 #include "core/text_prep.h"
 
+#include <cstdlib>
+
 namespace holos {
 namespace {
 
@@ -29,9 +31,11 @@ uint32_t decode_cp(std::string_view s, size_t& i) {
     return cp;
 }
 
-// Слово: українські кириличні літери + апострофи (ʼ, ’, ').
+// Слово: українські кириличні літери + апострофи (ʼ, ’, ') + комбінуючий
+// наголос U+0301 (ручний '+' у тексті — слово з наголосом не розривається).
 bool is_word_cp(uint32_t cp) {
-    return (cp >= 0x0400 && cp <= 0x04FF) || cp == 0x02BC || cp == 0x2019 || cp == '\'';
+    return (cp >= 0x0400 && cp <= 0x04FF) || cp == 0x02BC || cp == 0x2019 ||
+           cp == '\'' || cp == 0x0301;
 }
 
 // Голосний звук, на який взагалі може впасти наголос: а е є и і ї о у ю я
@@ -86,9 +90,22 @@ int acute_position(std::string_view s) {
 
 } // namespace
 
+// Шлях до словника користувача: HOLOS_STRESS_USER (явно) або stress_user.txt
+// поряд зі stress.trie (каталог моделей). Файл опційний — якщо його немає,
+// використовується лише основний словник.
+std::string default_user_stress_path(const std::string& trie_path) {
+    if (const char* v = std::getenv("HOLOS_STRESS_USER"); v && *v) return v;
+    size_t pos = trie_path.find_last_of("/\\");
+    std::string dir = (pos == std::string::npos) ? std::string(".") : trie_path.substr(0, pos);
+    return dir + "/stress_user.txt";
+}
+
 // Словниковий + neural наголос: словник спершу; якщо без наголосу -> accentor.
 std::string stress_word(const StressDictionary& dict, const Accentor* accentor,
                         std::string_view word) {
+    // Наголос уже задано у тексті (ручний '+' -> U+0301) — слово не перестресовуємо.
+    if (word.find("\u0301") != std::string_view::npos) return std::string(word);
+
     const std::vector<int> chosen = dict.accent_positions(word);
     if (!chosen.empty()) return dict.stress_at(word, chosen);
 
@@ -144,7 +161,7 @@ std::string stress_text(const StressDictionary& dict, const Accentor* accentor,
 }
 
 Phonemizer::Phonemizer(const std::string& stress_trie_path, const std::string& accentor_onnx)
-    : dict_(stress_trie_path) {
+    : dict_(stress_trie_path, default_user_stress_path(stress_trie_path)) {
     if (!accentor_onnx.empty()) {
         try {
             accentor_ = std::make_unique<Accentor>(accentor_onnx);
@@ -157,9 +174,13 @@ Phonemizer::Phonemizer(const std::string& stress_trie_path, const std::string& a
 
 Phonemizer::~Phonemizer() = default;
 
+size_t Phonemizer::user_stress_size() const { return dict_.user_size(); }
+
 std::vector<std::string> Phonemizer::phonemize(const std::string& text, bool raw_stress) const {
     std::vector<std::string> result;
-    for (const std::string& part : TextPrep::split_to_parts(text, true)) {
+    // Розбиття ПО РЕЧЕННЯХ (group=false): частина = одне речення, між частинами
+    // сервер додає паузу — речення не злипаються, пунктуація не ріжеться посеред тексту.
+    for (const std::string& part : TextPrep::split_to_parts(text, false)) {
         std::string norm = TextPrep::normalize_part(part);
         if (norm.empty()) continue;
         std::string stressed = raw_stress ? norm : stress_text(dict_, accentor_.get(), norm);

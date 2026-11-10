@@ -34,6 +34,22 @@ std::string last_cp(const std::string& s) {
     return s.substr(i);
 }
 
+// Голосна української (великий/маленький регістр) + латиниця — для перевірки
+// місця позначки '+' у apply_stress_markup.
+bool is_vowel_cp(uint32_t cp) {
+    switch (cp) {
+        case 0x0430: case 0x0435: case 0x0454: case 0x0438: case 0x0456:
+        case 0x0457: case 0x043E: case 0x0443: case 0x044E: case 0x044F:
+        case 0x0410: case 0x0415: case 0x0404: case 0x0418: case 0x0406:
+        case 0x0407: case 0x041E: case 0x0423: case 0x042E: case 0x042F:
+        case 'a': case 'e': case 'i': case 'o': case 'u': case 'y':
+        case 'A': case 'E': case 'I': case 'O': case 'U': case 'Y':
+            return true;
+        default:
+            return false;
+    }
+}
+
 } // namespace
 
 std::string TextPrep::collapse_newlines(std::string_view text) {
@@ -83,7 +99,45 @@ std::string TextPrep::strip_wrappers(std::string_view text) {
 std::string TextPrep::apply_stress_markup(std::string_view text) {
     std::string s(text);
     size_t p = 0;
-    while ((p = s.find('+', p)) != std::string::npos) { s.replace(p, 1, "\u0301"); p += 2; }
+    while ((p = s.find('+', p)) != std::string::npos) {
+        // '+' після голосної (зам+ок) — ставимо наголос як є.
+        size_t prev = p;
+        if (prev > 0) {
+            --prev;
+            while (prev > 0 && (static_cast<unsigned char>(s[prev]) & 0xC0) == 0x80) --prev;
+        }
+        bool after_vowel = false;
+        if (prev < p) {
+            utf8proc_int32_t prev_cp = 0;
+            utf8proc_ssize_t n = utf8proc_iterate(
+                reinterpret_cast<const utf8proc_uint8_t*>(s.data()) + prev,
+                static_cast<utf8proc_ssize_t>(p - prev), &prev_cp);
+            after_vowel = n > 0 && is_vowel_cp(static_cast<uint32_t>(prev_cp));
+        }
+        if (after_vowel) {
+            s.replace(p, 1, "\u0301");
+            p += 2; // U+0301 = 2 байти
+            continue;
+        }
+        // '+' перед голосною (к+ава) — переносимо наголос на наступну голосну;
+        // якщо голосної немає — просто прибираємо '+' (раніше він ставив наголос
+        // на приголосну, напр. «к+ава» -> «ќава»).
+        s.erase(p, 1);
+        size_t q = p, acute_at = std::string::npos;
+        while (q < s.size()) {
+            utf8proc_int32_t cp = 0;
+            utf8proc_ssize_t n = utf8proc_iterate(
+                reinterpret_cast<const utf8proc_uint8_t*>(s.data()) + q,
+                static_cast<utf8proc_ssize_t>(s.size() - q), &cp);
+            if (n <= 0) { ++q; continue; }
+            if (is_vowel_cp(static_cast<uint32_t>(cp))) { acute_at = q + n; break; }
+            q += n;
+        }
+        if (acute_at != std::string::npos) {
+            s.insert(acute_at, "\u0301");
+            p = acute_at + 2;
+        }
+    }
     return nfkc(s);
 }
 

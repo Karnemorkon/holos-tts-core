@@ -65,6 +65,25 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Ручний наголос '+' («прощаюча» обробка): '+' після голосної — як є;
+    // '+' перед голосною — переносимо на голосну; без голосної — прибираємо.
+    struct SmCase { std::string in, exp; };
+    const SmCase sm_cases[] = {
+        {"зам+ок", "замо\u0301к"},  // замóк
+        {"ка+ва", "ка\u0301ва"},    // кáва
+        {"н+оги", "но\u0301ги"},    // нóги (раніше давало «н́оги»)
+        {"к+ава", "ка\u0301ва"},    // к+ава -> кáва (раніше давало «ќава»)
+        {"абв+", "абв"},            // голосної немає -> '+' прибрано
+    };
+    for (const auto& c : sm_cases) {
+        std::string got = TextPrep::apply_stress_markup(c.in);
+        if (got == c.exp) { ++pass; } else {
+            ++fail;
+            std::cerr << "FAIL stress-markup [" << c.in << "]\n  exp{" << c.exp
+                      << "}\n  got{" << got << "}\n";
+        }
+    }
+
     std::cout << pass << " passed, " << fail << " failed\n";
     return fail ? 1 : 0;
 }

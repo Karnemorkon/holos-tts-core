@@ -64,8 +64,14 @@ static std::string synth_cmd(int argc, char** argv) {
     const auto& voice_arr = vs.get(voice);
 
     std::vector<float> audio;
+    bool first_part = true;
     for (const auto& p : ph.phonemize(text, raw_stress)) {
         auto chunk = synth.generate(tok(p), voice_arr.data(), speed);
+        // Тиша між реченнями (частинами), як і в сервері — 0.3 с.
+        if (!first_part)
+            audio.insert(audio.end(),
+                         static_cast<size_t>(0.3 * holos::kSampleRate), 0.f);
+        first_part = false;
         audio.insert(audio.end(), chunk.begin(), chunk.end());
     }
     if (audio.empty()) throw std::runtime_error("no phonemes generated");
@@ -91,8 +97,12 @@ int main(int argc, char** argv) {
         if (argc < 4) { usage(); return 2; }
         std::string trie_path = argv[2];
         try {
-            holos::StressDictionary dict(trie_path);
-            std::cerr << "[holos] stress.trie keys=" << dict.size() << "\n";
+            // Словник користувача (stress_user.txt біля trie / HOLOS_STRESS_USER):
+            // ті самі записи, що й під час синтезу — можна перевірити наголос.
+            holos::StressDictionary dict(trie_path,
+                                         holos::default_user_stress_path(trie_path));
+            std::cerr << "[holos] stress.trie keys=" << dict.size()
+                      << ", user=" << dict.user_size() << "\n";
             for (int i = 3; i < argc; i++) {
                 std::string w = argv[i];
                 auto pos = dict.accent_positions(w);

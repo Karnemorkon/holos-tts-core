@@ -15,6 +15,9 @@ Expose to LAN: set HOLOS_HOST=0.0.0.0 (no authentication — be careful).
 Data:
   models\    model files (override with HOLOS_MODELS_DIR)
              models\holos-onnx\ - multi-stage bundle (default format)
+  models\stress_user.txt  user word-stress dictionary (edit in Notepad: one
+             word per line, '+' after the stressed vowel, e.g. ka+va).
+             User entries override the built-in dictionary. See file header.
   speakers\  cloned voices (*.npy)
 
 CLI: bin\holos-cli.exe

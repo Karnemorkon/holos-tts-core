@@ -13,6 +13,8 @@ done
 cp "$HERE/holos-tts.sh" "$HERE/download-models.sh" "$HERE/README.txt" "$ROOT/"
 chmod +x "$ROOT/holos-tts.sh" "$ROOT/download-models.sh"
 mkdir -p "$ROOT/lib" "$ROOT/models" "$ROOT/speakers"
+# Шаблон словника користувача (пояснення, як додавати наголоси); не перезаписуємо.
+[ -f "$ROOT/models/stress_user.txt" ] || cp "$HERE/../stress_user.txt" "$ROOT/models/stress_user.txt"
 
 rm -rf "$ROOT/include" "$ROOT/cmake" "$ROOT/share" "$ROOT/lib/cmake" "$ROOT/lib/pkgconfig"
 find "$ROOT/bin" -maxdepth 1 -type f ! -name holos-server ! -name holos-cli -delete

@@ -12,7 +12,7 @@ application/json`), якщо не вказано інше.
 | `voice` | str | Пресет або клонований голос (типово — перший) |
 | `speed` | float | Швидкість 0.25–4.0 (типово 1.0) |
 | `auto_verbalize` | str/bool | `neural` (типово), `rule`, `off`; legacy `true`/`false` |
-| `raw_stress` | bool | `true` → без автонаголосу, власні `+`/U+0301 |
+| `raw_stress` | bool | `true` → без автонаголосу (лише власні `+`/U+0301); `false` (типово) → автонаголос, а `+` у тексті також підтримується |
 | `format` | str | Лише `wav` (типово); інші формати — 400 |
 
 Відповідь: `{format, sample_rate, duration_sec, voice, text, verbalized_text, audio_base64}`.

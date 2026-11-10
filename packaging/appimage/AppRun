@@ -10,6 +10,13 @@ PIDFILE="$DATA_DIR/holos-server.pid"
 BROWSER_LOG="$DATA_DIR/browser.log"
 
 export HOLOS_MODELS_DIR="${HOLOS_MODELS_DIR:-$APPDIR/usr/share/holos-tts/models}"
+# Словник користувача: у AppImage моделі read-only, тому stress_user.txt
+# тримаємо у DATA_DIR (writable); шаблон копіюється з образу при першому запуску.
+export HOLOS_STRESS_USER="${HOLOS_STRESS_USER:-$DATA_DIR/stress_user.txt}"
+if [ ! -f "$HOLOS_STRESS_USER" ] && [ -f "$HOLOS_MODELS_DIR/stress_user.txt" ]; then
+    mkdir -p "$DATA_DIR"
+    cp "$HOLOS_MODELS_DIR/stress_user.txt" "$HOLOS_STRESS_USER" 2>/dev/null || true
+fi
 export HOLOS_VERBALIZER_DIR="${HOLOS_VERBALIZER_DIR-$HOLOS_MODELS_DIR/verbalizer/gemma-int8}"
 export HOLOS_VOICE_ENCODER="${HOLOS_VOICE_ENCODER-$HOLOS_MODELS_DIR/voice_encoder.onnx}"
 export HOLOS_SPEAKERS_DIR="${HOLOS_SPEAKERS_DIR:-$DATA_DIR/speakers}"
@@ -199,6 +206,7 @@ HolosTTS AppImage
   HOLOS_MODEL_FORMAT    auto|bundle|legacy (типово auto)
   HOLOS_VERBALIZER_DIR=""  rule-only (без neural)
   HOLOS_SPEAKERS_DIR    голоси (типово \$XDG_DATA_HOME/holos-tts-core/speakers)
+  HOLOS_STRESS_USER     словник наголосів (типово \$DATA_DIR/stress_user.txt)
 
 Дані та логи:           $DATA_DIR
   holos-server.pid      PID запущеного сервера
