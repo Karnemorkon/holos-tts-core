@@ -176,6 +176,10 @@ Phonemizer::~Phonemizer() = default;
 
 size_t Phonemizer::user_stress_size() const { return dict_.user_size(); }
 
+void Phonemizer::reload_user_stress() { dict_.reload_user(); }
+
+const std::string& Phonemizer::user_stress_path() const { return dict_.user_path(); }
+
 std::vector<std::string> Phonemizer::phonemize(const std::string& text, bool raw_stress) const {
     std::vector<std::string> result;
     // Розбиття ПО РЕЧЕННЯХ (group=false): частина = одне речення, між частинами

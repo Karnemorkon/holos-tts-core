@@ -23,6 +23,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cctype>
 #include <functional>
 #include <cstdlib>
 #include <memory>
@@ -203,6 +204,12 @@ size_t find_long_part_split(const std::string& s, bool* at_sentence = nullptr) {
     return split;
 }
 
+// Шлях до словника користувача (stress_user.txt) — заповнюється в Engine::load
+// і використовується API /api/stress-user. g_user_file_mtx серіалізує
+// читання/запис файлу між запитами (reload у StressDictionary має власний лок).
+std::string g_user_stress_path;
+std::mutex g_user_file_mtx;
+
 // Глобальний движок (завантажується один раз при старті).
 struct Engine {
     std::unique_ptr<holos::Phonemizer> phonemizer;
@@ -221,6 +228,7 @@ struct Engine {
               const std::string& speakers_dir, int threads,
               holos::SynthesizerMode mode = holos::SynthesizerMode::Auto) {
         phonemizer = std::make_unique<holos::Phonemizer>(trie, accentor);
+        g_user_stress_path = phonemizer->user_stress_path();
         if (size_t n = phonemizer->user_stress_size(); n > 0)
             LOG_INFO << "словник користувача: " << n << " слів (stress_user.txt)";
         synth = std::make_unique<holos::Synthesizer>(onnx, threads, mode);
@@ -402,6 +410,96 @@ HttpResponsePtr json_error(int code, const std::string& detail) {
     auto resp = HttpResponse::newHttpJsonResponse(j);
     resp->setStatusCode((HttpStatusCode)code);
     return resp;
+}
+
+// ---- /api/stress-user: перегляд і редагування словника користувача ----
+
+// Декодування %XX у path-параметрі. '+' НЕ чіпається: drogon уже декодував
+// шлях (його urlDecode робить '+' -> пробіл, що зламало б слова з '+'),
+// а в нас '+' — частина запису (ка+ва).
+std::string path_decode(std::string s) {
+    if (s.find('%') == std::string::npos) return s;
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '%' && i + 2 < s.size() && std::isxdigit((unsigned char)s[i + 1]) &&
+            std::isxdigit((unsigned char)s[i + 2])) {
+            out += char(std::stoi(s.substr(i + 1, 2), nullptr, 16));
+            i += 2;
+        } else {
+            out += s[i];
+        }
+    }
+    return out;
+}
+
+// JSON зі вмістом словника користувача: {path, count, words:[{raw,word,stressed}]}.
+// Викликати ПІД g_user_file_mtx (читання файлу).
+Json::Value stress_user_json() {
+    Json::Value j;
+    j["path"] = g_user_stress_path;
+    j["words"] = Json::arrayValue;
+    if (g_user_stress_path.empty()) {
+        j["count"] = 0;
+        j["error"] = "Шлях до словника користувача не задано";
+        return j;
+    }
+    auto recs = holos::StressDictionary::user_file_read(g_user_stress_path);
+    for (auto& r : recs) {
+        Json::Value w;
+        w["raw"] = r.raw;
+        w["word"] = r.word;
+        w["stressed"] = r.stressed;
+        j["words"].append(w);
+    }
+    j["count"] = (Json::UInt64)recs.size();
+    return j;
+}
+
+// POST /api/stress-user — додати/замінити запис {word:"ка+ва"}; після успішного
+// запису перечитує словник (живий reload) і повертає оновлений список.
+void handle_stress_user_add(const HttpRequestPtr& req,
+                            std::function<void(const HttpResponsePtr&)>&& callback) {
+    const auto& body = req->getJsonObject();
+    if (!body) { callback(json_error(400, "очікується JSON-тіло")); return; }
+    const std::string word = body->get("word", "").asString();
+    if (g_user_stress_path.empty()) {
+        callback(json_error(503, "Шлях до словника користувача не задано (HOLOS_STRESS_USER)"));
+        return;
+    }
+    std::lock_guard lk(g_user_file_mtx);
+    std::string err;
+    if (!holos::StressDictionary::user_file_upsert(g_user_stress_path, word, &err)) {
+        callback(json_error(400, err));
+        return;
+    }
+    if (g_engine.phonemizer) g_engine.phonemizer->reload_user_stress();
+    LOG_INFO << "словник користувача: запис додано/оновлено ('" << word << "')";
+    Json::Value resp = stress_user_json();
+    resp["status"] = "ok";
+    callback(HttpResponse::newHttpJsonResponse(resp));
+}
+
+// DELETE /api/stress-user/{1} — видалити слово (зі збереженням коментарів).
+void handle_stress_user_delete(const std::string& raw_word,
+                               std::function<void(const HttpResponsePtr&)>&& callback) {
+    const std::string word = trim(path_decode(raw_word));
+    if (word.empty()) { callback(json_error(400, "очікується слово")); return; }
+    if (g_user_stress_path.empty()) {
+        callback(json_error(503, "Шлях до словника користувача не задано (HOLOS_STRESS_USER)"));
+        return;
+    }
+    std::lock_guard lk(g_user_file_mtx);
+    std::string err;
+    if (!holos::StressDictionary::user_file_remove(g_user_stress_path, word, &err)) {
+        callback(json_error(404, err));
+        return;
+    }
+    if (g_engine.phonemizer) g_engine.phonemizer->reload_user_stress();
+    LOG_INFO << "словник користувача: запис видалено ('" << word << "')";
+    Json::Value resp = stress_user_json();
+    resp["status"] = "ok";
+    callback(HttpResponse::newHttpJsonResponse(resp));
 }
 
 // Спільна валідація конфігу синтезу (HTTP+WS). Повертає помилку або порожній рядок.
@@ -1185,6 +1283,13 @@ audio{width:100%;margin-top:.75rem}
 .mode-tab{padding:.55rem 1rem;border-radius:8px;background:#171a21;border:1px solid #2a2f3a;color:#9aa0aa;cursor:pointer;font-size:.9rem;user-select:none}
 .mode-tab:hover{border-color:#3b82f6;color:#e6e6e6}
 .mode-tab.active{background:#3b82f6;border-color:#3b82f6;color:#fff;font-weight:600}
+.stress-table{width:100%;border-collapse:collapse;margin-top:.75rem;font-size:.9rem}
+.stress-table th,.stress-table td{text-align:left;padding:.45rem .5rem;border-bottom:1px solid #2a2f3a}
+.stress-table th{color:#9aa0aa;font-weight:600;font-size:.8rem}
+.stress-table td code{font-size:.95rem}
+.stress-del{background:transparent;border:1px solid #2a2f3a;border-radius:6px;color:#ff6b6b;
+  padding:.15rem .55rem;cursor:pointer;font:inherit;font-size:.85rem}
+.stress-del:hover{border-color:#ff6b6b}
 .seg-list{display:flex;flex-direction:column;gap:.75rem}
 .seg-item{background:#0f1115;border:1px solid #2a2f3a;border-radius:10px;padding:.75rem;display:flex;flex-direction:column;gap:.6rem}
 .seg-item.drag-over{border-color:#3b82f6}
@@ -1205,6 +1310,7 @@ textarea.seg-text{min-height:60px}
 <div class="mode-tabs" id="modeTabs">
   <div class="mode-tab active" data-mode="single">Одиночний текст</div>
   <div class="mode-tab" data-mode="dialogue">Діалог (мульти-спікер)</div>
+  <div class="mode-tab" data-mode="stress">Наголоси</div>
 </div>
 
 <div id="modeSingle">
@@ -1286,6 +1392,32 @@ textarea.seg-text{min-height:60px}
 </div>
 </div>
 
+<!-- Stress dictionary mode -->
+<div id="modeStress" style="display:none">
+<div class="card">
+  <label>Словник власних наголосів</label>
+  <p style="font-size:.78rem;color:#6b7280;margin:.3rem 0 .75rem">
+    Записи мають перевагу над основним словником. Формат: <code>ка+ва</code> — «+» одразу після голосної,
+    на якій наголос. Додані слова застосовуються одразу, без перезапуску.
+  </p>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+    <input type="text" id="stressWord" placeholder="напр. ка+ва" style="flex:1;min-width:180px"
+           onkeydown="if(event.key==='Enter')stressAdd()">
+    <button id="stressAddBtn" type="button" onclick="stressAdd()">Додати</button>
+    <button id="stressReloadBtn" class="secondary" type="button" onclick="loadStress()">Оновити список</button>
+  </div>
+  <div class="status" id="stressStatus"></div>
+  <table class="stress-table">
+    <thead><tr><th>Запис</th><th>Як читається</th><th style="width:1%"></th></tr></thead>
+    <tbody id="stressList"></tbody>
+  </table>
+  <p style="font-size:.78rem;color:#6b7280;margin:.6rem 0 0">
+    <span id="stressCount">—</span><br>
+    <span id="stressPath" style="word-break:break-all"></span>
+  </p>
+</div>
+</div>
+
 <div class="card">
   <label>Клонування голосу з WAV</label>
   <div class="row">
@@ -1351,6 +1483,7 @@ $("voice").onchange=updateDel;
 const modeTabs=$("modeTabs");
 const modeSingle=$("modeSingle");
 const modeDialogue=$("modeDialogue");
+const modeStress=$("modeStress");
 modeTabs.querySelectorAll(".mode-tab").forEach(tab=>{
   tab.onclick=()=>{
     modeTabs.querySelectorAll(".mode-tab").forEach(t=>t.classList.remove("active"));
@@ -1358,8 +1491,61 @@ modeTabs.querySelectorAll(".mode-tab").forEach(tab=>{
     const m=tab.dataset.mode;
     modeSingle.style.display=m==="single"?"":"none";
     modeDialogue.style.display=m==="dialogue"?"":"none";
+    modeStress.style.display=m==="stress"?"":"none";
+    if(m==="stress")loadStress();
   };
 });
+
+// ---------- Словник наголосів користувача ----------
+function stressStatus(m,cls=""){const s=$("stressStatus");s.textContent=m;s.className="status "+cls}
+async function loadStress(){
+  try{
+    const r=await fetch("/api/stress-user");const d=await r.json();
+    if(!r.ok)throw new Error(d.detail||("HTTP "+r.status));
+    const tb=$("stressList");tb.innerHTML="";
+    $("stressCount").textContent="Слів у словнику: "+(d.count||0);
+    $("stressPath").textContent=d.path||"";
+    (d.words||[]).forEach(w=>{
+      const tr=document.createElement("tr");
+      const td1=document.createElement("td");td1.textContent=w.raw;
+      const td2=document.createElement("td");
+      const code=document.createElement("code");code.textContent=w.stressed;td2.appendChild(code);
+      const td3=document.createElement("td");
+      const btn=document.createElement("button");
+      btn.className="stress-del";btn.type="button";btn.textContent="×";
+      btn.title="Видалити запис";
+      btn.onclick=()=>delStress(w.word,w.raw);
+      td3.appendChild(btn);
+      tr.append(td1,td2,td3);tb.appendChild(tr);
+    });
+    if(d.error)stressStatus(d.error,"err");else stressStatus("");
+  }catch(e){stressStatus("Не вдалося завантажити словник: "+e,"err")}
+}
+async function stressAdd(){
+  const inp=$("stressWord");const word=inp.value.trim();
+  if(!word){stressStatus("Введіть запис, напр. ка+ва","err");return}
+  stressStatus("Додаю…");
+  try{
+    const r=await fetch("/api/stress-user",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({word})});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.detail||("HTTP "+r.status));
+    inp.value="";
+    await loadStress();
+    stressStatus("Додано: "+word,"ok");
+  }catch(e){stressStatus(e.message||String(e),"err")}
+}
+async function delStress(word,raw){
+  if(!confirm("Видалити «"+raw+"» зі словника наголосів?"))return;
+  try{
+    const r=await fetch("/api/stress-user/"+encodeURIComponent(word),{method:"DELETE"});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.detail||("HTTP "+r.status));
+    await loadStress();
+    stressStatus("Видалено: "+raw,"ok");
+  }catch(e){stressStatus(e.message||String(e),"err")}
+}
+loadStress();
 
 // ---------- Діалоговий режим ----------
 function dstatus(m,cls=""){const s=$("statusDlg");s.textContent=m;s.className="status "+cls}
@@ -1871,6 +2057,19 @@ int main() {
             [](const HttpRequestPtr&, std::function<void(const HttpResponsePtr&)>&& cb,
                std::string name) {
                 handle_voices_delete(name, std::move(cb));
+            },
+            {Delete})
+        .registerHandler("/api/stress-user",
+            [](const HttpRequestPtr&, std::function<void(const HttpResponsePtr&)>&& cb) {
+                std::lock_guard lk(g_user_file_mtx);
+                cb(HttpResponse::newHttpJsonResponse(stress_user_json()));
+            },
+            {Get})
+        .registerHandler("/api/stress-user", &handle_stress_user_add, {Post})
+        .registerHandler("/api/stress-user/{1}",
+            [](const HttpRequestPtr&, std::function<void(const HttpResponsePtr&)>&& cb,
+               std::string word) {
+                handle_stress_user_delete(word, std::move(cb));
             },
             {Delete})
         .registerHandler("/v1/audio/speech", &handle_openai_speech, {Post})

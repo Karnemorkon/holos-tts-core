@@ -38,6 +38,13 @@ public:
     // Кількість слів у словнику користувача (stress_user.txt біля stress.trie).
     size_t user_stress_size() const;
 
+    // Перечитує словник користувача з диска (після редагування файлу через
+    // веб-інтерфейс/API). Потокобезпечно, синтез може працювати в цей момент.
+    void reload_user_stress();
+
+    // Шлях до файлу словника користувача ("" = не використовується).
+    const std::string& user_stress_path() const;
+
 private:
     StressDictionary dict_;
     std::unique_ptr<Accentor> accentor_; // nullptr якщо не завантажено

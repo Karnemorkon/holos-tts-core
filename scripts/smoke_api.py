@@ -98,4 +98,19 @@ print(f"cloned synth OK: {synth2['duration_sec']:.2f}s")
 
 request("/api/voices/" + urllib.parse.quote(NAME), method="DELETE", allow_404=True)
 print("delete OK")
+
+# Словник наголосів користувача: GET -> POST (додавання) -> DELETE (прибирання).
+su = request("/api/stress-user")
+assert "words" in su and "count" in su, su
+print(f"stress-user GET OK: count={su['count']} path={su.get('path', '')}")
+TEST_WORD = "тест+ове"
+added = request("/api/stress-user", {"word": TEST_WORD}, method="POST")
+assert added.get("status") == "ok", added
+assert any(w["raw"] == TEST_WORD for w in added.get("words", [])), added
+print(f"stress-user POST OK: count={added['count']}")
+request("/api/stress-user/" + urllib.parse.quote(TEST_WORD), method="DELETE")
+after = request("/api/stress-user")
+assert not any(w["raw"] == TEST_WORD for w in after.get("words", [])), after
+print(f"stress-user DELETE OK: count={after['count']}")
+
 print("SMOKE PASSED")

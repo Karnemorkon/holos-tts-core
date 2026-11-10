@@ -8,7 +8,10 @@
 #include <utf8proc.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <fstream>
+#include <mutex>
+#include <shared_mutex>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -205,6 +208,66 @@ std::string user_key(std::string_view stressed_word) {
     return unicode_lower(fold_apostrophes(bare));
 }
 
+// Кількість комбінуючих наголосів U+0301 (0xCC 0x81) у рядку.
+int count_acutes(std::string_view s) {
+    int n = 0;
+    for (size_t i = 0; i + 1 < s.size(); ++i)
+        if (static_cast<unsigned char>(s[i]) == 0xCC &&
+            static_cast<unsigned char>(s[i + 1]) == 0x81) ++n;
+    return n;
+}
+
+// Слово без '+' і без наголосу (U+0301) — для відображення та ключа.
+std::string bare_word(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    size_t i = 0;
+    while (i < s.size()) {
+        if (s[i] == '+') { ++i; continue; }
+        if (static_cast<unsigned char>(s[i]) == 0xCC && i + 1 < s.size() &&
+            static_cast<unsigned char>(s[i + 1]) == 0x81) { i += 2; continue; }
+        out.push_back(s[i]); ++i;
+    }
+    return out;
+}
+
+// Сирі рядки файлу (з коментарями/порожніми); файл не існує -> порожній вектор.
+std::vector<std::string> read_raw_lines(const std::string& path) {
+    std::vector<std::string> out;
+    std::ifstream f(path);
+    if (!f) return out;
+    std::string line;
+    while (std::getline(f, line)) out.push_back(line);
+    return out;
+}
+
+// Атомарний запис рядків: спочатку path.tmp, потім rename (читачі не бачать
+// напівзаписаного файлу).
+bool write_lines_atomic(const std::string& path, const std::vector<std::string>& lines,
+                        std::string* error) {
+    const std::string tmp = path + ".tmp";
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        if (!f) {
+            if (error) *error = "Не вдалося відкрити файл для запису: " + path;
+            return false;
+        }
+        for (const auto& l : lines) f << l << '\n';
+        if (!f.good()) {
+            f.close();
+            std::remove(tmp.c_str());
+            if (error) *error = "Помилка запису файлу (немає доступу до каталогу?)";
+            return false;
+        }
+    }
+    if (std::rename(tmp.c_str(), path.c_str()) != 0) {
+        std::remove(tmp.c_str());
+        if (error) *error = "Не вдалося оновити файл: " + path;
+        return false;
+    }
+    return true;
+}
+
 // Завантаження словника користувача (текстовий файл): один запис на рядок
 // у форматі «слово+» ('+' після голосної, на якій наголос) або слово з уже
 // вставленим U+0301. Рядки з '#' (коментарі) та порожні — ігноруються;
@@ -246,7 +309,11 @@ struct StressDictionary::Impl {
     marisa::Trie trie;
     // Словник користувача (stress_user.txt): ключ = lower+апострофи, значення =
     // codepoint-позиції наголосу (конвенція як у trie). Перевіряється ПЕРЕД trie.
+    // user_mtx захищає user і user_path від reload під час синтезу в потоках:
+    // читачі — shared, reload_user() — exclusive.
+    std::shared_mutex user_mtx;
     std::unordered_map<std::string, std::vector<int>> user;
+    std::string user_path;
 };
 
 StressDictionary::StressDictionary(const std::string& trie_path,
@@ -257,6 +324,7 @@ StressDictionary::StressDictionary(const std::string& trie_path,
         delete impl_; impl_ = nullptr;
         throw std::runtime_error("Не вдалося завантажити stress.trie: " + std::string(e.what()));
     }
+    impl_->user_path = user_path;
     if (!user_path.empty()) load_user_file(user_path, impl_->user);
 }
 
@@ -264,17 +332,38 @@ StressDictionary::~StressDictionary() { delete impl_; }
 
 bool StressDictionary::loaded() const { return impl_ && impl_->trie.num_keys() > 0; }
 size_t StressDictionary::size() const { return impl_ ? impl_->trie.num_keys() : 0; }
-size_t StressDictionary::user_size() const { return impl_ ? impl_->user.size() : 0; }
 
-const std::vector<int>* StressDictionary::user_find(std::string_view word) const {
-    if (!impl_ || impl_->user.empty() || word.empty()) return nullptr;
+size_t StressDictionary::user_size() const {
+    if (!impl_) return 0;
+    std::shared_lock lk(impl_->user_mtx);
+    return impl_->user.size();
+}
+
+void StressDictionary::reload_user() {
+    if (!impl_) return;
+    std::unordered_map<std::string, std::vector<int>> fresh;
+    if (!impl_->user_path.empty()) load_user_file(impl_->user_path, fresh);
+    std::unique_lock lk(impl_->user_mtx);
+    impl_->user.swap(fresh);
+}
+
+const std::string& StressDictionary::user_path() const {
+    static const std::string kEmpty;
+    return impl_ ? impl_->user_path : kEmpty;
+}
+
+std::optional<std::vector<int>> StressDictionary::user_find(std::string_view word) const {
+    if (!impl_ || word.empty()) return std::nullopt;
+    std::shared_lock lk(impl_->user_mtx);
+    if (impl_->user.empty()) return std::nullopt;
     auto it = impl_->user.find(unicode_lower(fold_apostrophes(word)));
-    return it == impl_->user.end() ? nullptr : &it->second;
+    if (it == impl_->user.end()) return std::nullopt;
+    return it->second; // копія під локом: reload не зможе зіпсувати вказівник
 }
 
 std::vector<std::vector<int>> StressDictionary::accent_variants(std::string_view word) const {
     if (!impl_) return {};
-    if (const auto* p = user_find(word)) return {*p}; // словник користувача: один запис
+    if (auto p = user_find(word)) return {std::move(*p)}; // словник користувача: один запис
     Payload p2;
     if (!find_payload(impl_->trie, word, p2)) return {};
     return p2.variants;
@@ -282,7 +371,7 @@ std::vector<std::vector<int>> StressDictionary::accent_variants(std::string_view
 
 std::vector<int> StressDictionary::accent_positions(std::string_view word) const {
     if (!impl_) return {};
-    if (const auto* p = user_find(word)) return *p; // пріоритет користувача
+    if (auto p = user_find(word)) return *p; // пріоритет користувача
     Payload p2;
     if (!find_payload(impl_->trie, word, p2)) return {};
     return p2.chosen;
@@ -301,6 +390,107 @@ std::string StressDictionary::stress_at(std::string_view word,
 
 std::string StressDictionary::stress(std::string_view word) const {
     return stress_at(word, accent_positions(word));
+}
+
+// ---- Робота з файлом словника користувача (для веб-інтерфейсу/API) ----
+
+StressDictionary::UserEntryCheck StressDictionary::check_user_entry(std::string_view input) {
+    UserEntryCheck out;
+    std::string s(input);
+    if (size_t h = s.find('#'); h != std::string::npos) s.erase(h);
+    s = trim(s);
+    out.raw = s;
+    if (s.empty()) { out.error = "Порожній запис"; return out; }
+    if (s.find_first_of(" \t") != std::string::npos) {
+        out.error = "Один рядок — одне слово без пробілів (формат: ка+ва)";
+        return out;
+    }
+    // '+' -> U+0301 (та сама «прощаюча» обробка, що й у тексті/при завантаженні).
+    out.stressed = TextPrep::apply_stress_markup(s);
+    out.word = bare_word(s);
+    const int acutes = count_acutes(out.stressed);
+    if (acutes == 1) { out.ok = true; return out; }
+    if (acutes > 1) {
+        out.error = "Лише один наголос на слово: '+' ставиться один раз (напр. ка+ва)";
+        return out;
+    }
+    out.error = (s.find('+') != std::string::npos)
+        ? "'+' має стати одразу після голосної, на якій наголос (напр. ка+ва)"
+        : "Додайте '+' після голосної, на якій має бути наголос (напр. ка+ва)";
+    return out;
+}
+
+std::vector<StressDictionary::UserRecord> StressDictionary::user_file_read(const std::string& path) {
+    std::vector<UserRecord> out;
+    std::ifstream f(path);
+    if (!f) return out;
+    std::string line;
+    while (std::getline(f, line)) {
+        auto chk = check_user_entry(line); // обрізає коментар і пробіли
+        if (!chk.ok) continue;             // коментарі/порожні/некоректні не показуємо
+        out.push_back({std::move(chk.raw), std::move(chk.word), std::move(chk.stressed)});
+    }
+    return out;
+}
+
+bool StressDictionary::user_file_upsert(const std::string& path, std::string_view input,
+                                        std::string* error) {
+    if (path.empty()) {
+        if (error) *error = "Шлях до словника користувача не задано";
+        return false;
+    }
+    UserEntryCheck chk = check_user_entry(input);
+    if (!chk.ok) { if (error) *error = chk.error; return false; }
+    const std::string key = user_key(chk.stressed);
+    std::vector<std::string> lines = read_raw_lines(path);
+    if (lines.empty()) {
+        lines.push_back("# Словник наголосів користувача. Один запис на рядок: слово+");
+        lines.push_back("# ('+' після голосної, напр. ка+ва). Записи мають перевагу над stress.trie.");
+    }
+    bool replaced = false;
+    std::vector<size_t> dup; // індекси дублікатів (після першого заміненого)
+    for (size_t i = 0; i < lines.size(); ++i) {
+        auto old = check_user_entry(lines[i]);
+        if (!old.ok || user_key(old.stressed) != key) continue;
+        if (!replaced) { lines[i] = chk.raw; replaced = true; } // оновлення запису
+        else { dup.push_back(i); }                              // прибираємо дублікат
+    }
+    if (!replaced) lines.push_back(chk.raw);
+    std::vector<std::string> out;
+    out.reserve(lines.size() - dup.size());
+    size_t di = 0;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (di < dup.size() && dup[di] == i) { ++di; continue; }
+        out.push_back(std::move(lines[i]));
+    }
+    return write_lines_atomic(path, out, error);
+}
+
+bool StressDictionary::user_file_remove(const std::string& path, std::string_view word,
+                                        std::string* error) {
+    std::vector<std::string> lines = read_raw_lines(path);
+    if (lines.empty()) {
+        if (error) *error = "Слово не знайдено у словнику";
+        return false;
+    }
+    const std::string key = user_key(bare_word(word));
+    std::vector<char> drop(lines.size(), 0);
+    size_t found = 0;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        auto rec = check_user_entry(lines[i]);
+        if (!rec.ok || user_key(rec.stressed) != key) continue;
+        drop[i] = 1;
+        ++found;
+    }
+    if (!found) {
+        if (error) *error = "Слово не знайдено у словнику";
+        return false;
+    }
+    std::vector<std::string> out;
+    out.reserve(lines.size() - found);
+    for (size_t i = 0; i < lines.size(); ++i)
+        if (!drop[i]) out.push_back(std::move(lines[i]));
+    return write_lines_atomic(path, out, error);
 }
 
 } // namespace holos

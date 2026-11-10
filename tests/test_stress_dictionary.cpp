@@ -128,11 +128,112 @@ void test_dictionary(const std::string& trie_path) {
     }
 }
 
+// ---- Робота з файлом словника користувача (без stress.trie) ----
+void test_user_file() {
+    using HD = holos::StressDictionary;
+
+    // Валідація запису.
+    auto ok = HD::check_user_entry("ка+ва");
+    check(ok.ok, "check: ка+ва валідний");
+    check(ok.word == "кава", "check: word без '+'");
+    check(ok.stressed == "ка\u0301ва", "check: кава має U+0301 після першої голосної");
+    {
+        auto c = HD::check_user_entry("к+ава");
+        check(c.ok && c.stressed == "ка\u0301ва", "check: к+ава «прощаючий» -> наголос на голосній");
+    }
+    check(!HD::check_user_entry("ка вода").ok, "check: два слова відхиляється");
+    check(HD::check_user_entry("ка вода").error.find("слово") != std::string::npos,
+          "check: помилка про слово/пробіл українською");
+    check(!HD::check_user_entry("").ok, "check: порожній рядок відхиляється");
+    check(!HD::check_user_entry("# коментар").ok, "check: чистий коментар не запис");
+    check(!HD::check_user_entry("ка+ва+вода").ok, "check: два '+' відхиляється");
+    check(!HD::check_user_entry("кава").ok, "check: запис без '+' відхиляється");
+    {
+        auto c = HD::check_user_entry("  ка+ва # пояснення");
+        check(c.ok && c.raw == "ка+ва", "check: коментар і пробіли обрізаються");
+    }
+
+    const std::string path = "stress_user_file_test.tmp.txt";
+    std::remove(path.c_str());
+
+    // Файл не існує -> порожній список, видалення -> помилка.
+    check(HD::user_file_read(path).empty(), "read: неіснуючий файл -> порожній");
+    std::string err;
+    check(!HD::user_file_remove(path, "ка+ва", &err) && !err.empty(),
+          "remove: неіснуючий файл -> помилка");
+
+    // Створення + збереження коментарів + upsert (додавання і заміна).
+    check(HD::user_file_upsert(path, "ка+ва", &err), "upsert: створення файлу");
+    {
+        std::ofstream f(path);
+        f << "# мій коментар\n"
+             "ка+ва\n"
+             "вода+\n";
+    }
+    check(HD::user_file_upsert(path, "зам+ок", &err), "upsert: додавання нового");
+    auto recs = HD::user_file_read(path);
+    check(recs.size() == 3, "upsert: 3 записи після додавання");
+    check(HD::user_file_upsert(path, "кава+", &err), "upsert: заміна за словом");
+    recs = HD::user_file_read(path);
+    check(recs.size() == 3, "upsert: заміна не збільшує кількість");
+    {
+        std::ifstream f(path);
+        std::string all((std::istreambuf_iterator<char>(f)),
+                        std::istreambuf_iterator<char>());
+        check(all.find("# мій коментар") != std::string::npos,
+              "upsert: коментар збережено");
+    }
+    check(!HD::user_file_upsert(path, "ка вода", &err) && err.find("слово") != std::string::npos,
+          "upsert: невалідний запис -> помилка українською");
+
+    // Видалення: зникає лише слово, коментарі — ні.
+    check(HD::user_file_remove(path, "кава", &err), "remove: видалення існуючого");
+    recs = HD::user_file_read(path);
+    check(recs.size() == 2, "remove: лишилося 2 записи");
+    check(!HD::user_file_remove(path, "блаблабла", &err),
+          "remove: невідоме слово -> помилка");
+    {
+        std::ifstream f(path);
+        std::string all((std::istreambuf_iterator<char>(f)),
+                        std::istreambuf_iterator<char>());
+        check(all.find("# мій коментар") != std::string::npos, "remove: коментар збережено");
+    }
+    std::remove(path.c_str());
+}
+
+// reload_user: перечитування файлу під час роботи (лише зі stress.trie).
+void test_user_reload(const std::string& trie_path) {
+    using HD = holos::StressDictionary;
+    const std::string path = "stress_user_reload_test.tmp.txt";
+    {
+        std::ofstream f(path);
+        f << "кава+\n";
+    }
+    HD dict(trie_path, path);
+    check(dict.user_size() == 1, "reload: 1 запис на старті");
+    check(dict.user_path() == path, "reload: user_path збережено");
+    {
+        std::ofstream f(path);
+        f << "кава+\n"
+             "вода+\n"
+             "зам+ок\n";
+    }
+    check(dict.user_size() == 1, "reload: файл змінено поза словником -> стара мапа");
+    dict.reload_user();
+    check(dict.user_size() == 3, "reload: після reload 3 записи");
+    check(dict.accent_positions("замок") == std::vector<int>{4},
+          "reload: нове слово доступне без перезапуску (зам+ок -> {4})");
+    std::remove(path.c_str());
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     test_utf8();
     std::cout << "utf8 ok\n";
+
+    test_user_file();
+    std::cout << "user file ok\n";
 
     // Шукаємо stress.trie: явний аргумент, потім типові місця (build/, repo root).
     std::vector<std::string> candidates;
@@ -146,6 +247,8 @@ int main(int argc, char** argv) {
     if (!trie.empty()) {
         test_dictionary(trie);
         std::cout << "dictionary ok (" << trie << ")\n";
+        test_user_reload(trie);
+        std::cout << "user reload ok\n";
     } else {
         std::cout << "dictionary skipped (немає stress.trie)\n";
     }
