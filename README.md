@@ -12,7 +12,7 @@
 > (REST + OpenAI-compatible + WebSocket + Web UI, port 8004) in **C++20 + ONNX Runtime** —
 > no Python at runtime. 27 voices, voice cloning, neural verbalization, stress (98.4%
 > vs the author's pipeline), multi-speaker dialogue and English transliteration;
-> multi-arch `linux/amd64` + `linux/arm64`. Current release: **0.8.6**.
+> multi-arch `linux/amd64` + `linux/arm64`. Current release: **0.8.7**.
 
 Нативне C++ ядро українського синтезу мовлення: один бінарник + ONNX Runtime, без Python
 у рантаймі. Перший запуск довантажує моделі (~0.8 ГБ, багатоетапний бандл
@@ -61,7 +61,7 @@ curl http://localhost:8004/healthz
 ```
 
 Ознака готовності:
-`{"status":"ok","engine":"holos-tts-core-native","version":"0.8.6","verbalizer":"neural+rule","stress":"dictionary-accentor","cloning":true,...}`.
+`{"status":"ok","engine":"holos-tts-core-native","version":"0.8.7","verbalizer":"neural+rule","stress":"dictionary-accentor","cloning":true,...}`.
 
 Потрібен Docker + Compose і ≥2 ГБ RAM (neural-дефолт тримає ~1.1 ГБ RSS; rule-only — ~468 МБ).
 Сервіс `downloader` завантажує лише відсутні файли, тож оновлення образу не тягне моделі заново.
@@ -79,10 +79,10 @@ curl -s -X POST http://localhost:8004/v1/audio/speech \
 
 Образ: [`morkon06/holostts-core`](https://hub.docker.com/r/morkon06/holostts-core) —
 multi-arch **linux/amd64 + linux/arm64**. Публікується лише з тегів `v*`:
-`0.8.6` (пін релізу) і `latest`. Тегів `sha-*` більше немає.
+`0.8.7` (пін релізу) і `latest`. Тегів `sha-*` більше немає.
 
 Образ **не містить моделей**. Найпростіше — compose з репозиторію: замініть у
-`docker-compose.yml` блок `build:` на `image: morkon06/holostts-core:0.8.6`, сервіс
+`docker-compose.yml` блок `build:` на `image: morkon06/holostts-core:0.8.7`, сервіс
 `downloader` довантажить моделі. Повний приклад, ліміти й альтернативи —
 [docs/CONFIGURATION.md](docs/CONFIGURATION.md#docker-hub).
 
