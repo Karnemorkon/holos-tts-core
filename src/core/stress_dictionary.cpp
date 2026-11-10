@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <shared_mutex>
@@ -260,8 +261,21 @@ bool write_lines_atomic(const std::string& path, const std::vector<std::string>&
             return false;
         }
     }
-    if (std::rename(tmp.c_str(), path.c_str()) != 0) {
-        std::remove(tmp.c_str());
+    // std::filesystem::rename, а не std::rename: на Windows CRT std::rename
+    // відмовляється перезаписувати існуючий файл, fs::rename — замінює ціль
+    // (MoveFileEx з REPLACE_EXISTING). Фолбек: якщо ціль відкрита іншим
+    // процесом (sharing violation), прибираємо її і повторюємо.
+    std::error_code ec;
+    std::filesystem::rename(tmp, path, ec);
+    if (ec && std::filesystem::exists(tmp)) {
+        std::error_code rm_target;
+        std::filesystem::remove(path, rm_target);
+        ec.clear();
+        std::filesystem::rename(tmp, path, ec);
+    }
+    if (ec) {
+        std::error_code rm_tmp;
+        std::filesystem::remove(tmp, rm_tmp);
         if (error) *error = "Не вдалося оновити файл: " + path;
         return false;
     }
