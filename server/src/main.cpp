@@ -1270,6 +1270,9 @@ button.small{padding:.4rem .75rem;font-size:.85rem}
 button{background:#3b82f6;color:#fff;border:0;border-radius:8px;padding:.65rem 1.25rem;font:inherit;font-weight:600;cursor:pointer}
 button:disabled{opacity:.5;cursor:not-allowed}
 button.secondary{background:#2a2f3a}
+button.voice-preview{background:#2a2f3a;border:1px solid #2a2f3a;border-radius:6px;width:2.3rem;height:2.3rem;display:inline-flex;align-items:center;justify-content:center;font-size:1rem;line-height:1;margin-top:.4rem}
+button.voice-preview:hover{background:#3a3f4a;border-color:#3b82f6}
+button.voice-preview:disabled{opacity:.5;cursor:not-allowed}
 audio{width:100%;margin-top:.75rem}
 .status{margin-top:.75rem;font-size:.85rem;color:#9aa0aa;min-height:1.2em}
 .status.err{color:#f87171}
@@ -1336,6 +1339,7 @@ textarea.seg-text{min-height:60px}
     <div>
       <label for="voice">Голос</label>
       <select id="voice"></select>
+      <button id="voicePreviewBtn" class="voice-preview" type="button" title="Послухати цей голос">🔊</button>
       <button id="delBtn" class="secondary small" type="button" style="margin-top:.5rem" disabled>Видалити клонований голос</button>
     </div>
     <div>
@@ -1479,6 +1483,27 @@ async function loadVoices(preferred){
 loadVoices();
 $("voice").onchange=updateDel;
 
+// Спільне прев'ю голосу: коротка фраза -> /api/synthesize -> відтворення у playerEl.
+async function playPreview(voice, btn, playerEl, statusFn){
+  if(!voice){statusFn("Оберіть голос","err");return}
+  const orig=btn.textContent;
+  btn.disabled=true;btn.textContent="⏳";
+  try{
+    const r=await fetch("/api/synthesize",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({text:"Привіт! Це перевірка голосу.",voice,speed:1,format:"wav",auto_verbalize:"off"})});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.detail||("HTTP "+r.status));
+    const blob=b64ToBlob(d.audio_base64);
+    const url=URL.createObjectURL(blob);
+    const p=$(playerEl);p.src=url;p.style.display="";p.play().catch(()=>{});
+    p.onended=()=>URL.revokeObjectURL(url);
+    setTimeout(()=>URL.revokeObjectURL(url),30000);
+    statusFn("Прев'ю голосу: "+voice,"ok");
+  }catch(e){statusFn("Прев'ю не вдалося: "+e,"err")}
+  finally{btn.disabled=false;btn.textContent=orig}
+}
+$("voicePreviewBtn").onclick=()=>playPreview($("voice").value,$("voicePreviewBtn"),"player",status);
+
 // Mode switching
 const modeTabs=$("modeTabs");
 const modeSingle=$("modeSingle");
@@ -1603,7 +1628,11 @@ function renderSegs(){
     const sv=document.createElement("select");
     fillVoiceSelect(sv,seg.voice);
     sv.onchange=()=>{dlgSegs[idx].voice=sv.value};
-    c1.append(l1,sv);
+    const pv=document.createElement("button");
+    pv.type="button";pv.className="voice-preview";pv.textContent="🔊";
+    pv.title="Послухати цей голос";
+    pv.onclick=()=>playPreview(sv.value,pv,"playerDlg",dstatus);
+    c1.append(l1,sv,pv);
 
     const c2=document.createElement("div");
     const l2=document.createElement("label");l2.textContent="Швидкість";
