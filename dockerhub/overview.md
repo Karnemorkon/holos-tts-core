@@ -8,7 +8,7 @@
 Production-ready **Ukrainian text-to-speech** service in a single container:
 **C++20 + ONNX Runtime**, no Python and no PyTorch at runtime. REST API,
 OpenAI-compatible endpoint, WebSocket streaming and a built-in Web UI with **voice cloning**,
-**multi-speaker dialogue** and **English transliteration**. Current release: **0.8.7**.
+**multi-speaker dialogue** and **English transliteration**. Current release: **0.8.8**.
 
 > **Disclaimer:** independent community project, not an official product of the original
 > neural network author ([patriotyk](https://github.com/patriotyk)). Model weights are
@@ -39,7 +39,7 @@ the model-downloader script, then use the published image instead of building:
 git clone https://github.com/Karnemorkon/holos-tts-core.git
 cd holos-tts-core
 # in docker-compose.yml replace the `build:` block with:
-#   image: morkon06/holostts-core:0.8.7
+#   image: morkon06/holostts-core:0.8.8
 docker compose up -d
 ```
 
@@ -48,7 +48,7 @@ Minimal compose (the full version with resource limits and healthcheck is in the
 ```yaml
 services:
   holos-core:
-    image: morkon06/holostts-core:0.8.7
+    image: morkon06/holostts-core:0.8.8
     container_name: holos-core
     ports:
       - "8004:8004"
@@ -88,7 +88,7 @@ subsequent starts skip existing files. Then open **http://localhost:8004/** and 
 
 ```bash
 curl http://localhost:8004/healthz
-# {"status":"ok","engine":"holos-tts-core-native","version":"0.8.7","cloning":true,...}
+# {"status":"ok","engine":"holos-tts-core-native","version":"0.8.8","cloning":true,...}
 ```
 
 ## Web UI and voice cloning
@@ -160,7 +160,7 @@ WebSocket: `/api/ws/synthesize` (PCM16 chunks). No authentication.
 ## Image tags
 
 - `latest` — latest release
-- `0.8.7` — pinned release
+- `0.8.8` — pinned release
 - Published only from `v*` tags; there are no `sha-*` tags.
 - Both tags are multi-arch manifests (`linux/amd64` + `linux/arm64`); the ARM64 image
   passes a runtime smoke test (healthz, synthesis, clone) before publication.
