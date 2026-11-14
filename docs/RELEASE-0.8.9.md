@@ -1,56 +1,64 @@
-# Реліз 0.8.9
+# 🎙 v0.8.9 — каталог із 29 CC0-голосів замість виведених `Speaker_*`
 
-**Дата:** 2026-11-14
+Цей реліз замінює вбудований каталог голосів. Старі імена `Speaker_*` більше не працюють — їх прибрано з усіх форматів нативних моделей через відсутність підтвердженої згоди дикторів (обговорення: HolosTTS discussion #5). Ця зміна є несумісною з попередніми версіями (backward-incompatible), тому вона супроводжується чітким керівництвом з міграції: [docs/MIGRATION.md](docs/MIGRATION.md).
 
-Реліз замінює вбудований каталог голосів: старі імена `Speaker_*` більше не
-працюють. Попри те, що проєкт ще в серії 0.x (публічний контракт нестабільний),
-це backward-incompatible зміна, тому вона супроводжується явним міграційним
-документом. Деталі та приклади — [docs/MIGRATION.md](MIGRATION.md).
+## Основні зміни
 
-## Головне
+### 29 CC0-голосів замість 27 `Speaker_*`
 
-- **29 CC0-голосів** замість 27 `Speaker_*` у всіх форматах native-моделей
-  (`holos-onnx/voices.npz`, `tts/voices.json`, `tts/voices.pt`).
-- Описові українські назви; `cv_uk_*` лишаються тільки як `legacy_id` у паку і
-  не використовуються в API.
-- OpenAI-імена `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer` далі
-  працюють і мапляться позиційно на перші 6 голосів каталогу.
-- Каталог опубліковано в
-  [Morkon/holos-voices-uk-cc0](https://huggingface.co/Morkon/holos-voices-uk-cc0)
-  під **CC0-1.0**; ваги моделі лишаються під MIT.
+У всіх форматах нативних моделей:
 
-## Виправлення downloader'а
+| Формат | Файл |
+|--------|------|
+| бандл | `holos-onnx/voices.npz` |
+| legacy | `tts/voices.json` |
+| PyTorch | `tts/voices.pt` |
 
-`scripts/download_models.py`:
+- Описові українські назви голосів (стать, теситура, вік, характер). Ідентифікатори `cv_uk_*` залишаються лише як `legacy_id` у пакеті й не використовуються в API.
+- Імена у стилі OpenAI (`alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer`) продовжують працювати і позиційно зіставляються (маплються) з першими шістьма голосами каталогу.
+- Каталог опубліковано під ліцензією **CC0-1.0** у репозиторії [Morkon/holos-voices-uk-cc0](https://huggingface.co/Morkon/holos-voices-uk-cc0); ваги нейромережі HolosTTS залишаються під ліцензією MIT.
+- Версія проєкту: **0.8.9** (серія 0.x; тип релізу — minor, з чітким міграційним шляхом).
 
-- завантажує Gemma-вербалізатор (`verbalizer/gemma-int8`) — чистий install
-  більше не стартує в `rule`-режимі;
-- використовує `--repo` для всіх операцій з HF;
-- коректно обробляє `--with-m2m100` як tree-prefix;
+### Виправлення скрипта завантаження (`scripts/download_models.py`)
+
+- завантажує Gemma-вербалізатор (`verbalizer/gemma-int8`) — чисте встановлення (clean install) більше не стартує в режимі правил (rule-режимі);
+- використовує `--repo` для всіх операцій з Hugging Face;
+- коректно обробляє `--with-m2m100` як префікс дерева (tree-prefix);
 - перевіряє `SHA256SUMS` для бандла;
-- перевіряє `voices.npz` (рівно `names`/`values`, 29 × 256, float32, finite,
-  унікальні імена) і legacy `voices.json` (29 × 256 finite);
-- має `--verify` (типово), `--no-verify`, `--verify-only`;
-- друкує коректні фінальні підказки `HOLOS_MODELS_DIR`, `HOLOS_ONNX`,
-  `HOLOS_VERBALIZER_DIR`.
+- валідує `voices.npz` (рівно `names`/`values`, `29 × 256`, `float32`, finite, унікальні імена) та legacy `voices.json` (`29 × 256`, finite);
+- має прапорці `--verify` (типово), `--no-verify`, `--verify-only`;
+- виводить коректні фінальні підказки для змінних оточення: `HOLOS_MODELS_DIR`, `HOLOS_ONNX`, `HOLOS_VERBALIZER_DIR`.
 
-## Інструменти
+### Інструменти
 
-- `holos-cli synth` без `--voice` синтезує першим голосом каталогу.
-- `scripts/bench_latency.py` більше не використовує `Speaker_0`; додано
-  `--voice` (типово — вибір сервера).
-- `tools/run_pcm_parity.py` приймає голос аргументом і позначений як
-  застарілий legacy-хелпер.
+- `holos-cli synth` без `--voice` синтезує мовлення першим голосом каталогу (`Жіноче контральто · доросле · рівне`).
+- `scripts/bench_latency.py` більше не використовує `Speaker_0`; додано опцію `--voice`.
+- `tools/run_pcm_parity.py` позначено як застарілий допоміжний інструмент (legacy helper), тепер приймає голос як аргумент.
 - `tests/test_synth.cpp` бере перший голос каталогу, якщо `--voice` не задано.
 
-## Оновлення
+## Оновлення Docker / портативних збірок
+
+Каталог голосів зберігається в томі (volume) з моделями, а не в самому образі. Після оновлення до v0.8.9 оновіть том моделей:
 
 ```bash
 docker compose down
-docker volume rm holos_core_models    # або download_models.py --force
+docker volume rm holos_core_models   # або запустіть download_models.py --force
 docker compose pull
 docker compose up -d
 ```
 
-Після старту: `/healthz` → `voices: 29`, `verbalizer: "neural+rule"`;
-`/api/voices` → 29 назв, `custom: []`.
+### Перевірка після оновлення
+
+- `/healthz` → `voices: 29`, `verbalizer: "neural+rule"`, `version: "0.8.9"`
+- `/api/voices` → 29 назв, `custom: []`
+
+## Відкат (Rollback)
+
+- **Образ:** поверніться на `morkon06/holostts-core:0.8.8`.
+- **Моделі:** потрібна збережена стара копія моделей (volume) із 27 голосами (офіційний репозиторій моделей містить лише 29 CC0-голосів).
+
+## Статус CI
+
+- ✅ CI (Linux build + ctest + CLI smoke)
+- ✅ Portable builds (Linux tar.gz, AppImage, Windows zip, SHA256SUMS)
+- ✅ Docker (amd64 + arm64 build + smoke)
