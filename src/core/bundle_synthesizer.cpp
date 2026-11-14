@@ -369,25 +369,11 @@ struct BundleSynthesizer::Impl {
             throw std::runtime_error("decoder audio too short");
         }
         audio.resize(expected_samples);
-
+        
         for (float s : audio) {
             if (!std::isfinite(s)) throw std::runtime_error("decoder produced NaN/Inf");
         }
-
-        // Коротке fade-in/fade-out (5 мс при 24 кГц) щоб приبرати кліки на
-        // межах фрагментів при їх конкатенації (склеюванні речень).
-        constexpr size_t kFadeSamples = 120;
-        if (audio.size() > 2 * kFadeSamples) {
-            for (size_t i = 0; i < kFadeSamples; ++i) {
-                float t = static_cast<float>(i) / static_cast<float>(kFadeSamples);
-                audio[i] *= t;
-            }
-            for (size_t i = 0; i < kFadeSamples; ++i) {
-                float t = static_cast<float>(kFadeSamples - i) / static_cast<float>(kFadeSamples);
-                audio[audio.size() - 1 - i] *= t;
-            }
-        }
-
+        
         return audio;
     }
     
