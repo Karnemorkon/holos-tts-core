@@ -124,6 +124,7 @@ jobs:
         run: |
           mkdir -p speakers
           docker run -d --name holos-smoke -p 8004:8004 \
+            -e HOLOS_VERBALIZER_DIR=/app/models/verbalizer/gemma-int8 \
             -v "$PWD/models:/app/models:ro" \
             -v "$PWD/speakers:/app/speakers" \
             "${{ steps.image.outputs.ref }}"
