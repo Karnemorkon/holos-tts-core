@@ -65,9 +65,9 @@ ENV PATH="/opt/holos/bin:${PATH}"
 ENV LD_LIBRARY_PATH="/opt/holos/lib:${LD_LIBRARY_PATH}"
 
 # Models are mounted at runtime (volume holos_models_cache -> /app/models).
-# HOLOS_VERBALIZER_DIR: neural verbalizer (M2M100 ONNX int8); empty -> rule-only.
+# HOLOS_VERBALIZER_DIR: Gemma neural verbalizer (default for v0.8.9+); empty -> rule-only.
 ENV HOLOS_MODELS_DIR=/app/models
-ENV HOLOS_VERBALIZER_DIR=/app/models/verbalizer/onnx-int8
+ENV HOLOS_VERBALIZER_DIR=/app/models/verbalizer/gemma-int8
 ENV HOLOS_PORT=8004
 EXPOSE 8004
 

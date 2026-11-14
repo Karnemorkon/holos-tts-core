@@ -12,8 +12,8 @@
 ## Linux AppImage (GUI)
 
 ```bash
-chmod +x holos-tts-core-0.7.1-x86_64.AppImage
-./holos-tts-core-0.7.1-x86_64.AppImage
+chmod +x holos-tts-core-0.8.9-x86_64.AppImage
+./holos-tts-core-0.8.9-x86_64.AppImage
 ```
 
 - Відкриває нативне вікно HolosTTS; перший запуск завантажує моделі (~0.8 ГБ)
@@ -22,7 +22,7 @@ chmod +x holos-tts-core-0.7.1-x86_64.AppImage
 - Потрібен системний **WebKitGTK 4.1** (Debian/Ubuntu: `libwebkit2gtk-4.1-0`; зазвичай
   уже встановлений). WebKit/GTK/GStreamer в AppImage **не** входять.
 - Потрібен **FUSE2**: Debian/Ubuntu — `libfuse2t64`, Arch — `fuse2`, Fedora — `fuse-libs`.
-  Без FUSE: `APPIMAGE_EXTRACT_AND_RUN=1 ./holos-tts-core-0.7.1-x86_64.AppImage`.
+  Без FUSE: `APPIMAGE_EXTRACT_AND_RUN=1 ./holos-tts-core-0.8.9-x86_64.AppImage`.
 - Закриття вікна зупиняє сервер; логи сайдкара —
   `~/.local/share/holos-tts-core/logs/sidecar.log`.
 - `HOLOS_PORT` — фіксований порт; `XDG_DATA_HOME` — інший каталог даних.
@@ -37,7 +37,7 @@ chmod +x holos-tts-core-0.7.1-x86_64.AppImage
 - **Тайлові WM (i3/sway/Hyprland тощо)**: мінімальний розмір вікна може ігноруватися,
   а файловий діалог — тайлитися. Додайте floating-правило для вікна HolosTTS.
 - **Wayland + NVIDIA (proprietary)**: у разі порожнього вікна або артефактів спробуйте
-  `WEBKIT_DISABLE_DMABUF_RENDERER=1 ./holos-tts-core-0.7.1-x86_64.AppImage`.
+  `WEBKIT_DISABLE_DMABUF_RENDERER=1 ./holos-tts-core-0.8.9-x86_64.AppImage`.
 - **NixOS**: запускайте через `appimage-run` або з `APPIMAGE_EXTRACT_AND_RUN=1`.
 - Автоматичний смоук виконується під Xvfb; візуальна поведінка залежить від
   системного WebKitGTK і конкретного DE.
@@ -45,7 +45,7 @@ chmod +x holos-tts-core-0.7.1-x86_64.AppImage
 ## Linux tar.gz
 
 ```bash
-tar xzf holos-tts-core-0.7.1-linux-x64.tar.gz
+tar xzf holos-tts-core-0.8.9-linux-x64.tar.gz
 cd holos-tts-core
 ./download-models.sh
 ./holos-tts.sh          # UI: http://127.0.0.1:8004/
@@ -61,7 +61,7 @@ cd holos-tts-core
 ### Інсталятор
 
 ```powershell
-.\holos-tts-core-0.7.1-windows-x64-setup.exe
+.\holos-tts-core-0.8.9-windows-x64-setup.exe
 ```
 
 Інсталятор ставить застосунок у каталог користувача, створює ярлики та одразу
@@ -72,7 +72,7 @@ cd holos-tts-core
 ### Портативний ZIP
 
 ```powershell
-Expand-Archive holos-tts-core-0.7.1-windows-x64.zip -DestinationPath .
+Expand-Archive holos-tts-core-0.8.9-windows-x64.zip -DestinationPath .
 cd holos-tts-core
 powershell -ExecutionPolicy Bypass -File download-models.ps1
 holos-tts.bat
