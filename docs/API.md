@@ -4,12 +4,17 @@
 публічну мережу без reverse proxy. Тіло запитів і відповідей — JSON (`Content-Type:
 application/json`), якщо не вказано інше.
 
+Вбудований каталог — **29 CC0-голосів** з описовими українськими назвами. Точний
+список завжди доступний у `GET /api/voices`; назви чутливі до регістру, пробілів і
+розділювача `·`. Старі `Speaker_*` більше не працюють — див.
+[MIGRATION.md](MIGRATION.md).
+
 ## `POST /api/synthesize`
 
 | Поле | Тип | Опис |
 |---|---|---|
 | `text` | str (обовʼязкове) | Текст, 10…50000 символів |
-| `voice` | str | Пресет або клонований голос (типово — перший) |
+| `voice` | str | Назва пресета з `/api/voices` або клонований голос (типово — перший голос каталогу) |
 | `speed` | float | Швидкість 0.25–4.0 (типово 1.0) |
 | `auto_verbalize` | str/bool | `neural` (типово), `rule`, `off`; legacy `true`/`false` |
 | `raw_stress` | bool | `true` → без автонаголосу (лише власні `+`/U+0301); `false` (типово) → автонаголос, а `+` у тексті також підтримується |
@@ -20,7 +25,7 @@ application/json`), якщо не вказано інше.
 ```bash
 curl -s -X POST http://localhost:8004/api/synthesize \
   -H 'Content-Type: application/json' \
-  -d '{"text":"Привіт, світе! Це тест синтезу мовлення українською.","voice":"Speaker_43"}' \
+  -d '{"text":"Привіт, світе! Це тест синтезу мовлення українською.","voice":"Жіноче контральто · доросле · рівне"}' \
   | python3 -c 'import sys,json,base64; open("out.wav","wb").write(base64.b64decode(json.load(sys.stdin)["audio_base64"]))'
 ```
 
@@ -32,7 +37,7 @@ curl -s -X POST http://localhost:8004/api/synthesize \
 |---|---|---|
 | `segments` | array (обовʼязкове) | 1…200 реплік |
 | `segments[].text` | str | Текст репліки (мінімальної довжини немає) |
-| `segments[].voice` | str | Пресет або клонований голос (типово — перший) |
+| `segments[].voice` | str | Назва пресета з `/api/voices` або клонований голос (типово — перший голос каталогу) |
 | `segments[].speed` | float | Швидкість 0.25–4.0 (типово 1.0) |
 | `segments[].auto_verbalize` | str/bool | `neural` (типово), `rule`, `off` |
 | `segments[].raw_stress` | bool | `true` → без автонаголосу |
@@ -47,8 +52,8 @@ verbalized_text, duration_sec, start_offset_ms, raw_stress, auto_verbalize}], au
 ```bash
 curl -s -X POST http://localhost:8004/api/synthesize_dialogue \
   -H 'Content-Type: application/json' \
-  -d '{"segments":[{"text":"Привіт, я Олена.","voice":"Speaker_0"},
-                   {"text":"Привіт, я Іван.","voice":"Speaker_1","start_offset_ms":1200}]}' \
+  -d '{"segments":[{"text":"Привіт, я Олена.","voice":"Жіноче контральто · доросле · рівне"},
+                   {"text":"Привіт, я Іван.","voice":"Чоловічий баритон · зрілий · теплий","start_offset_ms":1200}]}' \
   | python3 -c 'import sys,json,base64; open("dialog.wav","wb").write(base64.b64decode(json.load(sys.stdin)["audio_base64"]))'
 ```
 
@@ -80,17 +85,21 @@ curl -s http://localhost:8004/healthz      # статус, version, провай
 | Поле | Опис |
 |---|---|
 | `input` | текст (автовербалізація цифр) |
-| `voice` | пресет/клон (`Speaker_84`) або імена OpenAI (`alloy`, `nova`, …) |
+| `voice` | назва пресета з `/api/voices` (`Жіноче контральто · доросле · рівне`), клон (`My Voice`) або ім'я OpenAI (`alloy`, `nova`, …) |
 | `response_format` | `wav` (типово), `pcm`; `mp3` — кодек не підключено (400) |
 | `speed` | 0.25–4.0 (типово 1.0) |
 | `stream` | `true` → потокова відповідь |
 
 Автентифікація не потрібна; поле `model` приймається й ігнорується.
 
+OpenAI-імена `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer` мапляться
+**позиційно** на перші шість голосів каталогу в порядку `/api/voices`. Для
+контрольованого тембру передавайте повну назву голосу.
+
 ```bash
 curl -s -X POST http://localhost:8004/v1/audio/speech \
   -H 'Content-Type: application/json' \
-  -d '{"model":"tts-1","input":"Привіт!","voice":"Speaker_43","response_format":"wav"}' \
+  -d '{"model":"tts-1","input":"Привіт!","voice":"Жіноче контральто · доросле · рівне","response_format":"wav"}' \
   -o speech.wav
 ```
 
@@ -113,7 +122,7 @@ import asyncio, json, websockets
 
 async def main():
     async with websockets.connect('ws://localhost:8004/api/ws/synthesize') as ws:
-        await ws.send(json.dumps({'text': 'Привіт! Це потоковий синтез мови.', 'voice': 'Speaker_84'}))
+        await ws.send(json.dumps({'text': 'Привіт! Це потоковий синтез мови.', 'voice': 'Жіноче сопрано · доросле · тепле'}))
         with open('stream.pcm', 'wb') as f:
             async for msg in ws:
                 if isinstance(msg, bytes):

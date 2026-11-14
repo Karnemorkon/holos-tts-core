@@ -12,6 +12,7 @@ timings; без нього скрипт все одно міряє клієнт�
 Приклад:
   python3 scripts/bench_latency.py --url http://127.0.0.1:8005 --runs 3
   python3 scripts/bench_latency.py --cold-container holos-core-bench
+  python3 scripts/bench_latency.py --voice "Жіноче контральто · доросле · рівне"
 """
 import argparse
 import asyncio
@@ -42,11 +43,12 @@ def post_json(url, payload, timeout=300):
     return urllib.request.urlopen(req, timeout=timeout)
 
 
-def measure_nonstream(base, text, mode):
+def measure_nonstream(base, text, mode, voice=None):
+    payload = {"text": text, "auto_verbalize": mode}
+    if voice:
+        payload["voice"] = voice
     t0 = time.perf_counter()
-    with post_json(base + "/api/synthesize", {
-        "text": text, "voice": "Speaker_0", "auto_verbalize": mode,
-    }) as r:
+    with post_json(base + "/api/synthesize", payload) as r:
         body = json.loads(r.read())
     total_ms = (time.perf_counter() - t0) * 1000.0
     audio_s = body["duration_sec"]
@@ -59,12 +61,15 @@ def measure_nonstream(base, text, mode):
     }
 
 
-def measure_stream(base, text, mode):
-    t0 = time.perf_counter()
-    with post_json(base + "/v1/audio/speech", {
-        "input": text, "voice": "Speaker_0", "response_format": "pcm",
+def measure_stream(base, text, mode, voice=None):
+    payload = {
+        "input": text, "response_format": "pcm",
         "stream": True, "auto_verbalize": mode,
-    }) as r:
+    }
+    if voice:
+        payload["voice"] = voice
+    t0 = time.perf_counter()
+    with post_json(base + "/v1/audio/speech", payload) as r:
         first = r.read(1)
         ttfb_ms = (time.perf_counter() - t0) * 1000.0
         nbytes = len(first)
@@ -84,13 +89,14 @@ def measure_stream(base, text, mode):
     }
 
 
-async def ws_once(ws_url, text, mode):
+async def ws_once(ws_url, text, mode, voice=None):
     import websockets  # noqa: WPS433 (опційна залежність)
+    payload = {"text": text, "auto_verbalize": mode}
+    if voice:
+        payload["voice"] = voice
     t0 = time.perf_counter()
     async with websockets.connect(ws_url + "/api/ws/synthesize", max_size=None) as ws:
-        await ws.send(json.dumps({
-            "text": text, "voice": "Speaker_0", "auto_verbalize": mode,
-        }))
+        await ws.send(json.dumps(payload))
         ttfb_ms = None
         nbytes = 0
         while True:
@@ -114,9 +120,9 @@ async def ws_once(ws_url, text, mode):
                 }
 
 
-def measure_ws(base, text, mode):
+def measure_ws(base, text, mode, voice=None):
     ws_url = base.replace("https://", "wss://").replace("http://", "ws://")
-    return asyncio.run(ws_once(ws_url, text, mode))
+    return asyncio.run(ws_once(ws_url, text, mode, voice))
 
 
 def poll_health(base, timeout=120.0):
@@ -155,12 +161,12 @@ def fmt(v, digits=0):
     return f"{v:.{digits}f}"
 
 
-def run_group(base, path_name, fn, text_id, text, mode, runs, warmup):
+def run_group(base, path_name, fn, text_id, text, mode, runs, warmup, voice=None):
     results = []
     for _ in range(warmup):
-        fn(base, text, mode)
+        fn(base, text, mode, voice)
     for _ in range(runs):
-        results.append(fn(base, text, mode))
+        results.append(fn(base, text, mode, voice))
     timings = {}
     for r in results:
         t = r.get("timings")
@@ -215,6 +221,8 @@ def main():
                     help="docker-контейнер: перезапустити і заміряти cold start")
     ap.add_argument("--json-out", default=None)
     ap.add_argument("--paths", default="nonstream,stream,ws")
+    ap.add_argument("--voice", default=None,
+                    help="назва голосу з /api/voices (типово — вибір сервера: перший голос каталогу)")
     args = ap.parse_args()
     base = args.url.rstrip("/")
     paths = [p.strip() for p in args.paths.split(",") if p.strip()]
@@ -234,8 +242,10 @@ def main():
         cold_logs = startup_logs(args.cold_container)
 
     # Перший запит після старту (ORT warmup) — окремо.
-    first = measure_nonstream(base, TEXTS[0][1], "rule")
+    first = measure_nonstream(base, TEXTS[0][1], "rule", args.voice)
     print(f"First request after start (warmup): {first['total_ms']:.0f} ms")
+    if args.voice:
+        print(f"Voice: {args.voice}")
 
     rows = []
     for path_name in paths:
@@ -244,7 +254,7 @@ def main():
             for mode in MODES:
                 print(f"  {label} | {text_id} | {mode} ...", flush=True)
                 rows.append(run_group(base, label, fn, text_id, text, mode,
-                                      args.runs, args.warmup))
+                                      args.runs, args.warmup, args.voice))
     print()
     print_table(rows, cold_ms, cold_logs)
 

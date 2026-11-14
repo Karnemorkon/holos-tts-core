@@ -10,9 +10,9 @@
 
 > **English summary:** production-ready Dockerized **Ukrainian text-to-speech** service
 > (REST + OpenAI-compatible + WebSocket + Web UI, port 8004) in **C++20 + ONNX Runtime** —
-> no Python at runtime. 27 voices, voice cloning, neural verbalization, stress (98.4%
+> no Python at runtime. 29 CC0 voices, voice cloning, neural verbalization, stress (98.4%
 > vs the author's pipeline), multi-speaker dialogue and English transliteration;
-> multi-arch `linux/amd64` + `linux/arm64`. Current release: **0.8.8**.
+> multi-arch `linux/amd64` + `linux/arm64`. Current release: **0.8.9**.
 
 Нативне C++ ядро українського синтезу мовлення: один бінарник + ONNX Runtime, без Python
 у рантаймі. Перший запуск довантажує моделі (~0.8 ГБ, багатоетапний бандл
@@ -28,8 +28,10 @@
 
 ## Можливості
 
-- **Синтез українською** 24 кГц: 27 пресетів голосів + **клонування голосу з WAV**
+- **Синтез українською** 24 кГц: 29 пресетів голосів (**CC0**) + **клонування голосу з WAV**
   (клон зберігається під власним імʼям і стає звичайним `voice` для REST/OpenAI API).
+  Каталог голосів — [Morkon/holos-voices-uk-cc0](https://huggingface.co/Morkon/holos-voices-uk-cc0);
+  міграція зі старих `Speaker_*` — [docs/MIGRATION.md](docs/MIGRATION.md).
 - **Нативний C++20**: Drogon HTTP/WS + ONNX Runtime; без Python, PyTorch і Gradio у рантаймі.
 - **Автовербалізація**: `neural` (Gemma-3-270M int8, типово) / `rule` (C++ регулярки) / `off`;
   наголос — словник marisa-trie (2.9 млн форм; апострофи ʼ/’ згортаються до ASCII) +
@@ -63,7 +65,7 @@ curl http://localhost:8004/healthz
 ```
 
 Ознака готовності:
-`{"status":"ok","engine":"holos-tts-core-native","version":"0.8.8","verbalizer":"neural+rule","stress":"dictionary-accentor","cloning":true,...}`.
+`{"status":"ok","engine":"holos-tts-core-native","version":"0.8.9","verbalizer":"neural+rule","stress":"dictionary-accentor","cloning":true,...}`.
 
 Потрібен Docker + Compose і ≥2 ГБ RAM (neural-дефолт тримає ~1.1 ГБ RSS; rule-only — ~468 МБ).
 Сервіс `downloader` завантажує лише відсутні файли, тож оновлення образу не тягне моделі заново.
@@ -73,7 +75,7 @@ curl http://localhost:8004/healthz
 ```bash
 curl -s -X POST http://localhost:8004/v1/audio/speech \
   -H 'Content-Type: application/json' \
-  -d '{"input":"Привіт, світе! Це тест синтезу мовлення українською.","voice":"Speaker_43"}' \
+  -d '{"input":"Привіт, світе! Це тест синтезу мовлення українською.","voice":"Жіноче контральто · доросле · рівне"}' \
   -o out.wav
 ```
 
@@ -81,10 +83,10 @@ curl -s -X POST http://localhost:8004/v1/audio/speech \
 
 Образ: [`morkon06/holostts-core`](https://hub.docker.com/r/morkon06/holostts-core) —
 multi-arch **linux/amd64 + linux/arm64**. Публікується лише з тегів `v*`:
-`0.8.8` (пін релізу) і `latest`. Тегів `sha-*` більше немає.
+`0.8.9` (пін релізу) і `latest`. Тегів `sha-*` більше немає.
 
 Образ **не містить моделей**. Найпростіше — compose з репозиторію: замініть у
-`docker-compose.yml` блок `build:` на `image: morkon06/holostts-core:0.8.8`, сервіс
+`docker-compose.yml` блок `build:` на `image: morkon06/holostts-core:0.8.9`, сервіс
 `downloader` довантажить моделі. Повний приклад, ліміти й альтернативи —
 [docs/CONFIGURATION.md](docs/CONFIGURATION.md#docker-hub).
 
@@ -147,6 +149,8 @@ python3 scripts/download_models.py --out models
 | [API](docs/API.md) | REST, OpenAI, WebSocket, клонування голосу |
 | [Конфігурація](docs/CONFIGURATION.md) | змінні, теги образів, compose, ліміти |
 | [Моделі](docs/MODELS.md) | склад, завантаження, legacy-вербалізатор |
+| [Міграція 0.8.9](docs/MIGRATION.md) | 27 `Speaker_*` → 29 CC0-голосів, приклади, відкат |
+| [Реліз 0.8.9](docs/RELEASE-0.8.9.md) | стислий список змін |
 | [Архітектура](docs/ARCHITECTURE.md) | пайплайн, стрес, вербалізація, структура |
 | [Бенчмарки](docs/BENCHMARKS.md) | латентність, RSS, паритет з hybrid, методика |
 | [Збірка з джерела](docs/BUILDING.md) | cmake, golden-тести, нативний запуск |
@@ -156,6 +160,8 @@ python3 scripts/download_models.py --out models
 ## Ліцензія та подяки
 
 - **Цей репозиторій** (ядро, сервер, UI, оптимізації): [MIT](LICENSE).
+- **Вбудовані голоси** (29 пресетів): [CC0-1.0](https://creativecommons.org/publicdomain/zero/1.0/),
+  пак [Morkon/holos-voices-uk-cc0](https://huggingface.co/Morkon/holos-voices-uk-cc0).
 - **Нейромережа HolosTTS** (ваги бандла `holos-onnx`: `encoder/prosody/decoder`.onnx) належить автору
   **[patriotyk](https://github.com/patriotyk)** і розповсюджується за MIT:
   [github.com/patriotyk/HolosTTS](https://github.com/patriotyk/HolosTTS) ·

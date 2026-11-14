@@ -19,13 +19,13 @@ static void usage() {
         << "Usage:\n"
         << "  holos-cli stress <stress.trie> <word> [word...]\n"
         << "  holos-cli synth --trie <stress.trie> --vocab <vocab.json> --voices <voices.json>\n"
-        << "                  --model <holos.onnx> [--voice Speaker_0] [--speed 1.0]\n"
+        << "                  --model <holos.onnx> [--voice <name>] [--speed 1.0]\n"
         << "                  [--threads N] [--raw-stress] [--out out.wav] <text>\n"
         << "  holos-cli version\n";
 }
 
 static std::string synth_cmd(int argc, char** argv) {
-    std::string trie, vocab, voices, model, voice = "Speaker_0", out;
+    std::string trie, vocab, voices, model, voice, out;
     float speed = 1.0f;
     int threads = 0;
     bool raw_stress = false;
@@ -61,6 +61,11 @@ static std::string synth_cmd(int argc, char** argv) {
     holos::Voices vs = holos::Voices::load(voices);
     holos::CharTokenizer tok = holos::CharTokenizer::from_vocab_json(vocab);
     holos::Synthesizer synth(model, threads);
+    if (voice.empty()) {
+        auto names = vs.names();
+        if (names.empty()) throw std::runtime_error("voices.json contains no voices");
+        voice = names.front();
+    }
     const auto& voice_arr = vs.get(voice);
 
     std::vector<float> audio;
