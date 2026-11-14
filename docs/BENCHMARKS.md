@@ -37,7 +37,7 @@ python3 scripts/bench_latency.py --url http://127.0.0.1:8004 --runs 3
 
 ## Паритет з hybrid
 
-Виміряно з `voice=Speaker_43`:
+Виміряно з `voice=Жіноче контральто · доросле · рівне`:
 
 | Текст | hybrid | core | Δ |
 |---|---|---|---|

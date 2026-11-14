@@ -8,7 +8,7 @@
 Production-ready **Ukrainian text-to-speech** service in a single container:
 **C++20 + ONNX Runtime**, no Python and no PyTorch at runtime. REST API,
 OpenAI-compatible endpoint, WebSocket streaming and a built-in Web UI with **voice cloning**,
-**multi-speaker dialogue** and **English transliteration**. Current release: **0.8.8**.
+**multi-speaker dialogue** and **English transliteration**. Current release: **0.8.9**.
 
 > **Disclaimer:** independent community project, not an official product of the original
 > neural network author ([patriotyk](https://github.com/patriotyk)). Model weights are
@@ -16,7 +16,8 @@ OpenAI-compatible endpoint, WebSocket streaming and a built-in Web UI with **voi
 
 ## Features
 
-- Ukrainian speech synthesis, 24 kHz, **27 preset voices**
+- Ukrainian speech synthesis, 24 kHz, **29 CC0 preset voices** with descriptive names
+  (see [Morkon/holos-voices-uk-cc0](https://huggingface.co/Morkon/holos-voices-uk-cc0))
 - **Voice cloning** from a WAV sample (ONNX voice encoder)
 - **INT8 ONNX generator** on CPU — no GPU required, x86-64 and ARM64
 - **Automatic verbalization**: Gemma-3-270M int8 (`neural`, default), C++ rules (`rule`), or `off`
@@ -30,6 +31,19 @@ OpenAI-compatible endpoint, WebSocket streaming and a built-in Web UI with **voi
 - Multi-arch image: `linux/amd64`, `linux/arm64`; ~290 MB
 - ~1.1 GB RAM with neural verbalizer (~470 MB in `rule` mode)
 
+## Voices
+
+The built-in catalog contains **29 voices** with descriptive Ukrainian names. All
+preset voices are released under **CC0-1.0** in
+[Morkon/holos-voices-uk-cc0](https://huggingface.co/Morkon/holos-voices-uk-cc0);
+the model weights remain MIT-licensed. The same catalog is shipped in
+`voices.npz`, `voices.json` and `voices.pt`.
+
+Upgrading from 0.8.x: the retired `Speaker_*` names are no longer part of the
+catalog and return `404`. See the
+[migration guide](https://github.com/Karnemorkon/holos-tts-core/blob/main/docs/MIGRATION.md)
+for the 29-voice table, OpenAI aliases and rollback.
+
 ## Quick start
 
 The image **does not bundle models**. Clone the repository to get the compose file and
@@ -39,7 +53,7 @@ the model-downloader script, then use the published image instead of building:
 git clone https://github.com/Karnemorkon/holos-tts-core.git
 cd holos-tts-core
 # in docker-compose.yml replace the `build:` block with:
-#   image: morkon06/holostts-core:0.8.8
+#   image: morkon06/holostts-core:0.8.9
 docker compose up -d
 ```
 
@@ -48,7 +62,7 @@ Minimal compose (the full version with resource limits and healthcheck is in the
 ```yaml
 services:
   holos-core:
-    image: morkon06/holostts-core:0.8.8
+    image: morkon06/holostts-core:0.8.9
     container_name: holos-core
     ports:
       - "8004:8004"
@@ -88,7 +102,7 @@ subsequent starts skip existing files. Then open **http://localhost:8004/** and 
 
 ```bash
 curl http://localhost:8004/healthz
-# {"status":"ok","engine":"holos-tts-core-native","version":"0.8.8","cloning":true,...}
+# {"status":"ok","engine":"holos-tts-core-native","version":"0.8.9","cloning":true,...}
 ```
 
 ## Web UI and voice cloning
@@ -115,7 +129,7 @@ Custom JSON endpoint:
 ```bash
 curl -X POST http://localhost:8004/api/synthesize \
   -H 'Content-Type: application/json' \
-  -d '{"text":"Привіт, це HolosTTS.","voice":"Speaker_43"}'
+  -d '{"text":"Привіт, це HolosTTS.","voice":"Жіноче контральто · доросле · рівне"}'
 # -> JSON with duration_sec, verbalized_text and audio_base64 (WAV)
 ```
 
@@ -124,8 +138,8 @@ Multi-speaker dialogue:
 ```bash
 curl -X POST http://localhost:8004/api/synthesize_dialogue \
   -H 'Content-Type: application/json' \
-  -d '{"segments":[{"text":"Привіт, я Олена.","voice":"Speaker_0"},
-                   {"text":"Привіт, я Іван.","voice":"Speaker_1","start_offset_ms":1200}]}'
+  -d '{"segments":[{"text":"Привіт, я Олена.","voice":"Жіноче контральто · доросле · рівне"},
+                   {"text":"Привіт, я Іван.","voice":"Чоловічий баритон · зрілий · теплий","start_offset_ms":1200}]}'
 # -> JSON with per-segment offsets and a mixed audio_base64 (WAV)
 ```
 
@@ -134,7 +148,7 @@ OpenAI-compatible endpoint:
 ```bash
 curl -X POST http://localhost:8004/v1/audio/speech \
   -H 'Content-Type: application/json' \
-  -d '{"model":"tts-1","input":"Привіт!","voice":"Speaker_43","response_format":"wav"}' \
+  -d '{"model":"tts-1","input":"Привіт!","voice":"Жіноче контральто · доросле · рівне","response_format":"wav"}' \
   -o speech.wav
 ```
 
@@ -160,7 +174,7 @@ WebSocket: `/api/ws/synthesize` (PCM16 chunks). No authentication.
 ## Image tags
 
 - `latest` — latest release
-- `0.8.8` — pinned release
+- `0.8.9` — pinned release
 - Published only from `v*` tags; there are no `sha-*` tags.
 - Both tags are multi-arch manifests (`linux/amd64` + `linux/arm64`); the ARM64 image
   passes a runtime smoke test (healthz, synthesis, clone) before publication.
@@ -171,6 +185,7 @@ WebSocket: `/api/ws/synthesize` (PCM16 chunks). No authentication.
 - [API](https://github.com/Karnemorkon/holos-tts-core/blob/main/docs/API.md) ·
   [Configuration](https://github.com/Karnemorkon/holos-tts-core/blob/main/docs/CONFIGURATION.md) ·
   [Models](https://github.com/Karnemorkon/holos-tts-core/blob/main/docs/MODELS.md) ·
+  [Migration 0.8.9](https://github.com/Karnemorkon/holos-tts-core/blob/main/docs/MIGRATION.md) ·
   [Benchmarks](https://github.com/Karnemorkon/holos-tts-core/blob/main/docs/BENCHMARKS.md) ·
   [Portable builds](https://github.com/Karnemorkon/holos-tts-core/blob/main/docs/PORTABLE.md)
 - Releases: https://github.com/Karnemorkon/holos-tts-core/releases
@@ -180,4 +195,6 @@ WebSocket: `/api/ws/synthesize` (PCM16 chunks). No authentication.
 ## License
 
 Project code: see [LICENSE](https://github.com/Karnemorkon/holos-tts-core/blob/main/LICENSE).
+Built-in voices are CC0-1.0
+([Morkon/holos-voices-uk-cc0](https://huggingface.co/Morkon/holos-voices-uk-cc0)).
 Model weights remain under their original MIT license by the model author.

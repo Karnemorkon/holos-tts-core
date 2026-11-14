@@ -7,7 +7,7 @@
 | `HOLOS_MODELS_DIR` | `/app/models` | база моделей |
 | `HOLOS_TRIE` | `$MODELS/stress.trie` | словник наголосів |
 | `HOLOS_VOCAB` | `$MODELS/vocab.json` | токенізатор |
-| `HOLOS_VOICES` | `$MODELS/voices.json` | пресети голосів |
+| `HOLOS_VOICES` | `$MODELS/voices.json` | пресети голосів для **legacy**-режиму; bundle ігнорує й читає `$HOLOS_ONNX/voices.npz` |
 | `HOLOS_ONNX` | `$MODELS/holos_cpu_int8.onnx` | TTS-модель: каталог бандла або legacy `.onnx` |
 | `HOLOS_MODEL_FORMAT` | `auto` | `auto` = бандл, якщо є `holos_onnx.json`; `bundle`/`legacy` — примусово |
 | `HOLOS_ACCENTOR` | `$MODELS/accentor-lite.onnx` | нейро-фолбек наголосу |
@@ -22,7 +22,7 @@
 
 Примітки:
 
-- У **Docker-образі 0.7.1** `HOLOS_VERBALIZER_DIR` типово вказує на legacy
+- У **Docker-образі 0.8.9** `HOLOS_VERBALIZER_DIR` типово вказує на legacy
   `verbalizer/onnx-int8` (M2M100). Якщо цих файлів немає, сервер пише warning і
   переходить у `rule`-режим. `docker-compose.yml` перевизначає шлях на
   `verbalizer/gemma-int8` — рекомендований варіант.
@@ -36,7 +36,7 @@
 | Тег | Архітектури | Для чого |
 |---|---|---|
 | `latest` | linux/amd64 + linux/arm64 | останній реліз; оновлюється лише з тегів `v*` |
-| `vX.Y.Z` (напр. `0.7.1`) | linux/amd64 + linux/arm64 | пін релізу |
+| `vX.Y.Z` (напр. `0.8.9`) | linux/amd64 + linux/arm64 | пін релізу |
 
 `sha-*`-тегів немає: Docker Hub публікується лише з тегів `v*`. ARM64 збирається нативно
 (`ubuntu-24.04-arm`, без QEMU) і проходить runtime-смоук (healthz + синтез + клон)
@@ -51,7 +51,7 @@
 ```yaml
 services:
   holos-core:
-    image: morkon06/holostts-core:0.7.1
+    image: morkon06/holostts-core:0.8.9
     container_name: holos-core
     ports:
       - "8004:8004"

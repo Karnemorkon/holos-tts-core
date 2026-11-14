@@ -21,7 +21,7 @@ static void write_f32(const std::string& path, const std::vector<float>& a) {
 int main(int argc, char** argv) {
     // Режим парності: test_synth --phonemes <str> --dump-f32 <path> --vocab V --voices V --model M
     std::string phonemes, phonemes_file, dump_f32, dump_phon, vocab, voices, onnx, trie, text = "Привіт, це тест синтезу мовлення.";
-    std::string voice_name = "Speaker_0";
+    std::string voice_name;
     float speed = 1.0f;
     std::vector<std::string> pos;
     for (int i = 1; i < argc; ++i) {
@@ -53,6 +53,11 @@ int main(int argc, char** argv) {
     }
 
     holos::Voices vs = holos::Voices::load(voices);
+    if (voice_name.empty()) {
+        auto names = vs.names();
+        if (names.empty()) { std::cerr << "voices file contains no voices\n"; return 1; }
+        voice_name = names.front();
+    }
     holos::CharTokenizer tok = holos::CharTokenizer::from_vocab_json(vocab);
     holos::Synthesizer synth(onnx, 4);
     const auto& voice_arr = vs.get(voice_name);

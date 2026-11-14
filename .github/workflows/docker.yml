@@ -110,7 +110,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: models
-          key: holos-models-v2-bundle
+          key: holos-models-v3-cc0
 
       - name: Download models (only if cache miss)
         run: |
@@ -135,10 +135,10 @@ jobs:
             sleep 2
           done
           cat /tmp/healthz.json
-          jq -e '.status == "ok" and .cloning == true and (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' /tmp/healthz.json
+          jq -e '.status == "ok" and .cloning == true and .voices == 29 and .verbalizer == "neural+rule" and (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' /tmp/healthz.json
           curl -sf -X POST http://127.0.0.1:8004/api/synthesize \
             -H 'Content-Type: application/json' \
-            -d '{"text":"Привіт, світе! Це тест синтезу мовлення українською.","voice":"Speaker_43"}' \
+            -d '{"text":"Привіт, світе! Це тест синтезу мовлення українською.","voice":"Жіноче контральто · доросле · рівне"}' \
             -o /tmp/synth.json
           jq -e '.audio_base64 | length > 10000' /tmp/synth.json
           python3 - <<'EOF'
@@ -231,5 +231,5 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: ${{ env.IMAGE }}
-          short-description: "Ukrainian TTS in C++20: 27 voices, cloning, dialogue, stress, REST/OpenAI/WS"
+          short-description: "Ukrainian TTS in C++20: 29 CC0 voices, cloning, dialogue, stress, REST/OpenAI/WS"
           readme-filepath: ./dockerhub/overview.md

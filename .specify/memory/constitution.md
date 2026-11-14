@@ -1,3 +1,36 @@
+<!--
+Sync Impact Report
+==================
+Version change: 1.0.0 → 2.0.0 (MAJOR)
+Reason: the built-in voice catalog was intentionally replaced. The retired
+27 Speaker_* voices are absent from every native model format and cannot be
+preserved; keeping them in the constitution would contradict the shipped
+models. The project remains pre-1.0, so the catalog replacement ships as
+project version 0.8.9 with an explicit migration guide.
+
+Modified principles:
+- II. Voice Catalog and OpenAI API Compatibility — redefined around the
+  Morkon/holos-native-models catalog with descriptive names. At the time of
+  this amendment the catalog contains 29 CC0 voices, identical in the bundle
+  (voices.npz), legacy (voices.json), and PyTorch (voices.pt) formats. The
+  retired Speaker_* names are explicitly outside the catalog and are covered
+  by docs/MIGRATION.md.
+
+Added sections: none
+Removed sections: none
+Updated artifacts:
+- docs/MIGRATION.md (new migration and rollback guide)
+- docs/RELEASE-0.8.9.md (new release notes)
+- README.md, docs/API.md, docs/MODELS.md, docs/CONFIGURATION.md,
+  docs/BENCHMARKS.md, dockerhub/overview.md
+- scripts/download_models.py, scripts/bench_latency.py,
+  src/cli/holos_cli.cpp, tests/test_synth.cpp, tools/run_pcm_parity.py
+- version 0.8.8 → 0.8.9 in CMake, Cargo, Tauri, package metadata, README,
+  and Docker Hub metadata
+
+Follow-up TODOs: none
+-->
+
 # HolosTTS Core Constitution
 
 ## Core Principles
@@ -15,16 +48,29 @@ operational dependency, and lets the service run on ordinary machines without a 
 
 ### II. Voice Catalog and OpenAI API Compatibility (NON-NEGOTIABLE)
 
-Every release MUST keep all 27 preset voices available under their existing names, with their
-existing behavior. The OpenAI-compatible `POST /v1/audio/speech` endpoint MUST remain usable by
-clients that only replace `base_url`. It MUST accept `input`, `voice`, `response_format`, `speed`,
-`stream`, and `model` (accepted and ignored) as documented, and MUST continue to support `wav` and
-`pcm` responses. Voice cloning MAY add new voices, but it MUST NOT remove, rename, or shadow any of
-the 27 presets. A change that breaks an existing client contract requires a project MAJOR release
-and an explicit migration path.
+The built-in voice catalog MUST be the catalog published in
+`Morkon/holos-native-models`, using its descriptive voice names. At the time of this amendment
+the catalog contains 29 CC0 voices. The same catalog — identical names and identical
+256-dimensional embeddings — MUST be present in every native model format: the bundle
+(`voices.npz`), legacy (`voices.json`), and PyTorch (`voices.pt`).
+
+Every release MUST keep all voices of the current catalog available under their existing names,
+with their existing behavior. The OpenAI-compatible `POST /v1/audio/speech` endpoint MUST remain
+usable by clients that only replace `base_url`. It MUST accept `input`, `voice`,
+`response_format`, `speed`, `stream`, and `model` (accepted and ignored) as documented, and MUST
+continue to support `wav` and `pcm` responses. OpenAI voice names (`alloy`, `echo`, `fable`,
+`onyx`, `nova`, `shimmer`) MUST map positionally to the first six voices of the current catalog.
+
+Voice cloning MAY add new voices, but it MUST NOT remove, rename, or shadow any voice of the
+current catalog. The retired `Speaker_*` names are not part of the catalog; their removal is
+covered by `docs/MIGRATION.md`. A change that breaks an existing client contract MUST ship with
+an explicit migration path. While the project is in the 0.x series, such a change MAY ship in a
+MINOR or PATCH release; from 1.0.0 onward it requires a project MAJOR release.
 
 Rationale: users and integrations depend on a stable voice catalog and request/response contract;
-silent renames or removals break existing audio pipelines.
+silent renames or removals break existing audio pipelines. The catalog is defined by the models
+that actually ship, so the constitution must track that catalog instead of preserving retired
+names that no longer exist in any native model format.
 
 ### III. Windows ONNX Runtime 1.17.1 Compatibility
 
@@ -110,4 +156,4 @@ violation blocks merge or release until it is fixed or the constitution is amend
 exceptions are permitted; a temporary exception requires a documented amendment with an expiry
 date.
 
-**Version**: 1.0.0 | **Ratified**: 2026-11-13 | **Last Amended**: 2026-11-13
+**Version**: 2.0.0 | **Ratified**: 2026-11-13 | **Last Amended**: 2026-11-14
