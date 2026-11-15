@@ -30,7 +30,7 @@
 
 - **Синтез українською** 24 кГц: 29 пресетів голосів (**CC0**) + **клонування голосу з WAV**
   (клон зберігається під власним імʼям і стає звичайним `voice` для REST/OpenAI API).
-  Каталог голосів — [Morkon/holos-voices-uk-cc0](https://huggingface.co/Morkon/holos-voices-uk-cc0);
+  Каталог голосів — [Morkon/holos-voices-uk-cc0](https://huggingface.co/datasets/Morkon/holos-voices-uk-cc0);
   міграція зі старих `Speaker_*` — [docs/MIGRATION.md](docs/MIGRATION.md).
 - **Нативний C++20**: Drogon HTTP/WS + ONNX Runtime; без Python, PyTorch і Gradio у рантаймі.
 - **Автовербалізація**: `neural` (Gemma-3-270M int8, типово) / `rule` (C++ регулярки) / `off`;
