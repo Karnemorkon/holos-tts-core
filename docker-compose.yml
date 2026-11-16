@@ -62,7 +62,7 @@ services:
     restart: unless-stopped
 
   # Auto-init: populate holos_core_models volume from HF before holos-core starts.
-  # Idempotent — skips download when models are already present.
+  # Idempotent — skips missing-only weight download but always refreshes the voice catalog.
   downloader:
     image: python:3.11-slim
     working_dir: /work

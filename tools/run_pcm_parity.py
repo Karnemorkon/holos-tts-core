@@ -3,7 +3,7 @@
 # This script imports the Python reference pipeline (`app.tts_pipeline`) and was
 # used to compare phoneme->audio output against the C++ core. The Python app may
 # still expose the old Speaker_* names, so pass a voice name as the third
-# argument when needed. Current models use the descriptive 29-voice catalog;
+# argument when needed. Current models use the descriptive 17-voice catalog;
 # use scripts/bench_latency.py for current benchmarks.
 #
 # Usage: python3 tools/run_pcm_parity.py <phonemes.txt> <out.f32> [voice]
@@ -17,7 +17,7 @@ from app.tts_pipeline import _generate_part, _resolve_voice
 # дампить float32. Порівнюється з C++ dump (парність phoneme->audio).
 phon_file = sys.argv[1]
 f32_file = sys.argv[2]
-voice = sys.argv[3] if len(sys.argv) > 3 else "Жіноче контральто · доросле · рівне"
+voice = sys.argv[3] if len(sys.argv) > 3 else "Жіноче контральто · доросле · темне"
 
 parts = [l.rstrip('\n') for l in open(phon_file, encoding='utf-8') if l.strip()]
 voice_arr = _resolve_voice(voice)

@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-"""Download HolosTTS native models from the public HF repo.
+"""Download HolosTTS native models from the public HF repos.
 
-Default repo: Morkon/holos-native-models.
+Weights come from Morkon/holos-native-models. The voice catalog is always
+fetched from the Morkon/holos-voices-uk-cc0 dataset (runtime path
+onnx/voices.npz, 17 CC0 voices), so existing installs pick up catalog updates
+even when the rest of the models is already present.
+
 Default format is the multi-stage `holos-onnx` bundle:
   models/holos-onnx/{holos_onnx.json,encoder,prosody,decoder,decoder_window,source,voices.npz}
   models/stress.trie
@@ -12,7 +16,7 @@ Default format is the multi-stage `holos-onnx` bundle:
 Legacy single-graph layout (`--format legacy`):
   models/holos_cpu_int8.onnx
   models/vocab.json
-  models/voices.json
+  models/voices.json   (generated from the dataset voices.npz)
   + stress.trie / accentor-lite.onnx / voice_encoder.onnx / verbalizer/...
 
 Only files missing locally are fetched (adding a new model to the repo does
@@ -20,18 +24,19 @@ not re-download the rest); --force re-downloads everything. The default bundle
 includes the Gemma-3-270M verbalizer, so a clean install starts with
 `verbalizer: "neural+rule"`.
 
-Verification is enabled by default: the bundle `SHA256SUMS` is checked, and the
-voice catalog is validated (29 unique names, 256 finite float32 values each) in
-both `voices.npz` and legacy `voices.json`. Use --no-verify to skip, or
+Verification is enabled by default: the bundle `SHA256SUMS` is checked (the
+voices.npz line is rewritten after the catalog refresh), and the voice catalog
+is validated (17 unique names, 256 finite float32 values each) in both
+`voices.npz` and legacy `voices.json`. Use --no-verify to skip, or
 --verify-only to check an existing directory without downloading anything.
 
 Usage:
   python3 scripts/download_models.py [--out DIR] [--repo REPO]
       [--format legacy|bundle] [--force] [--with-m2m100]
-      [--verify | --no-verify] [--verify-only]
+      [--voices-url URL] [--verify | --no-verify] [--verify-only]
 
 Requires: pip install huggingface_hub (not needed for --verify-only).
-Public repo — no token needed.
+Public repos — no token needed.
 """
 
 from __future__ import annotations
@@ -42,19 +47,27 @@ import hashlib
 import json
 import math
 import os
+import shutil
 import struct
 import sys
 import tempfile
+import urllib.request
 import zipfile
 
-EXPECTED_VOICES = 29
+EXPECTED_VOICES = 17
 VOICE_DIM = 256
+
+# Voice catalog lives in a separate HF dataset. Only the runtime subdirectories
+# (onnx/, onnx-int8/, mlx/) hold the current 17-voice file; the dataset root
+# still contains the retired 29-voice files and must not be used.
+DEFAULT_VOICES_URL = (
+    "https://huggingface.co/datasets/Morkon/holos-voices-uk-cc0/resolve/main/onnx/voices.npz"
+)
 
 # Legacy format: repo_path -> local_path (relative to --out)
 FLAT_MAP = {
     "stress/stress.trie": "stress.trie",
     "tts/vocab.json": "vocab.json",
-    "tts/voices.json": "voices.json",
     "tts/holos_cpu_int8.onnx": "holos_cpu_int8.onnx",
     "accentor/accentor-lite.onnx": "accentor-lite.onnx",
     "tts/voice_encoder.onnx": "voice_encoder.onnx",
@@ -76,7 +89,6 @@ BUNDLE_FLAT_MAP = {
     "holos-onnx-int8/decoder.onnx": "holos-onnx/decoder.onnx",
     "holos-onnx-int8/decoder_window.onnx": "holos-onnx/decoder_window.onnx",
     "holos-onnx-int8/source.onnx": "holos-onnx/source.onnx",
-    "holos-onnx-int8/voices.npz": "holos-onnx/voices.npz",
     "holos-onnx-int8/SHA256SUMS": "holos-onnx/SHA256SUMS",
     "holos-onnx-int8/README.md": "holos-onnx/README.md",
 }
@@ -225,6 +237,83 @@ def verify_sha256sums(manifest: str, base_dir: str) -> None:
     print(f"  OK {manifest}: {checked} file(s)")
 
 
+def update_sha256sums_voices(manifest: str, voices_path: str) -> None:
+    """Rewrite the voices.npz line in an existing SHA256SUMS manifest."""
+    digest = sha256_file(voices_path)
+    lines: list[str] = []
+    replaced = False
+    if os.path.isfile(manifest):
+        with open(manifest, encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#"):
+                    parts = stripped.split()
+                    if len(parts) == 2 and parts[1] == "voices.npz":
+                        lines.append(f"{digest}  voices.npz\n")
+                        replaced = True
+                        continue
+                lines.append(line if line.endswith("\n") else line + "\n")
+    if not replaced:
+        lines.append(f"{digest}  voices.npz\n")
+    with open(manifest, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
+
+def write_voices_json_from_npz(npz_path: str, json_path: str) -> None:
+    """Generate legacy voices.json from any voices.npz (catalog-size agnostic)."""
+    with zipfile.ZipFile(npz_path) as zf, tempfile.TemporaryDirectory() as tmp_dir:
+        names = set(zf.namelist())
+        if names != {"names.npy", "values.npy"}:
+            raise ValueError(
+                f"{npz_path}: expected exactly names.npy and values.npy, got {sorted(names)}"
+            )
+        zf.extract("names.npy", tmp_dir)
+        zf.extract("values.npy", tmp_dir)
+        _, values_shape, _ = read_npy(os.path.join(tmp_dir, "values.npy"))
+        if (not isinstance(values_shape, tuple) or len(values_shape) != 2
+                or values_shape[1] != VOICE_DIM):
+            raise ValueError(
+                f"{npz_path}: values.npy must have shape (N, {VOICE_DIM}), "
+                f"got {values_shape}")
+        count = values_shape[0]
+        voice_names = parse_unicode_npy(os.path.join(tmp_dir, "names.npy"),
+                                        (count,))
+        values = parse_f32_npy(os.path.join(tmp_dir, "values.npy"),
+                               (count, VOICE_DIM))
+    data = {name: row for name, row in zip(voice_names, values)}
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    print(f"  generated {json_path} ({len(data)} voices)")
+
+
+def fetch_voices(url: str, out: str, fmt: str, verify: bool = True) -> None:
+    """Download the current voice catalog and install it for the chosen format."""
+    os.makedirs(out, exist_ok=True)
+    print(f"Downloading voice catalog from {url} ...")
+    fd, tmp_npz = tempfile.mkstemp(suffix=".npz")
+    os.close(fd)
+    try:
+        urllib.request.urlretrieve(url, tmp_npz)
+        if verify:
+            verify_voices_npz(tmp_npz)
+        if fmt == "bundle":
+            dst = os.path.join(out, "holos-onnx", "voices.npz")
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            if os.path.exists(dst):
+                os.remove(dst)
+            os.replace(tmp_npz, dst)
+            tmp_npz = ""
+            size_kb = os.path.getsize(dst) / 1024
+            print(f"  {dst}  ({size_kb:.1f} KB)")
+            update_sha256sums_voices(
+                os.path.join(out, "holos-onnx", "SHA256SUMS"), dst)
+        else:  # legacy
+            write_voices_json_from_npz(tmp_npz, os.path.join(out, "voices.json"))
+    finally:
+        if tmp_npz and os.path.exists(tmp_npz):
+            os.remove(tmp_npz)
+
+
 def verify_layout(out: str, fmt: str) -> None:
     print("Verifying model files ...")
     if fmt == "bundle":
@@ -268,6 +357,9 @@ def main() -> int:
                     help="skip verification")
     ap.add_argument("--verify-only", action="store_true",
                     help="only verify an existing model directory; do not download")
+    ap.add_argument("--voices-url",
+                    default=os.environ.get("HOLOS_VOICES_URL") or DEFAULT_VOICES_URL,
+                    help="voice catalog URL (default: Morkon/holos-voices-uk-cc0 onnx/voices.npz)")
     args = ap.parse_args()
 
     if args.verify_only and not args.verify:
@@ -347,55 +439,55 @@ def main() -> int:
         return 1
 
     if not missing_flat and not missing_tree:
-        print(f"Models ({format_name}) already present in {args.out} — skip download (--force to redo).")
-        if args.verify:
-            try:
-                verify_layout(args.out, args.format)
-            except Exception as exc:
-                print(f"ERROR: verification failed: {exc}", file=sys.stderr)
-                return 1
-        return 0
+        print(f"Models ({format_name}) already present in {args.out} — "
+              f"refreshing voice catalog only.")
+    else:
+        allow_patterns = missing_flat + missing_tree
+        total = len(missing_flat) + len(tree_missing_files)
+        print(f"Downloading {total} missing file(s) from {args.repo} "
+              f"({format_name}) -> {args.out} ...")
+        cache_dir = os.path.join(args.out, ".hf_cache")
+        try:
+            snapshot_download(
+                repo_id=args.repo,
+                local_dir=cache_dir,
+                token=token,
+                allow_patterns=allow_patterns,
+            )
+        except Exception as exc:
+            print(f"ERROR: download failed: {exc}", file=sys.stderr)
+            return 1
 
-    allow_patterns = missing_flat + missing_tree
-    total = len(missing_flat) + len(tree_missing_files)
-    print(f"Downloading {total} missing file(s) from {args.repo} "
-          f"({format_name}) -> {args.out} ...")
-    cache_dir = os.path.join(args.out, ".hf_cache")
+        def move(src_rel: str) -> None:
+            dst_rel = local_relpath(src_rel, flat_map, tree_prefixes)
+            if dst_rel is None:
+                print(f"  SKIP unexpected file: {src_rel}", file=sys.stderr)
+                return
+            src = os.path.join(cache_dir, src_rel)
+            dst = os.path.join(args.out, dst_rel)
+            if not os.path.exists(src):
+                print(f"  MISSING after download: {src_rel}", file=sys.stderr)
+                return
+            os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+            if os.path.exists(dst):
+                os.remove(dst)
+            os.replace(src, dst)
+            size_mb = os.path.getsize(dst) / 1e6
+            print(f"  {dst_rel}  ({size_mb:.1f} MB)")
+
+        for src_rel in missing_flat + tree_missing_files:
+            if not src_rel.endswith(".lock"):
+                move(src_rel)
+
+        shutil.rmtree(cache_dir, ignore_errors=True)
+
+    # The voice catalog is refreshed from the dataset on every run, so existing
+    # installs (and CI model caches) pick up catalog updates without --force.
     try:
-        snapshot_download(
-            repo_id=args.repo,
-            local_dir=cache_dir,
-            token=token,
-            allow_patterns=allow_patterns,
-        )
+        fetch_voices(args.voices_url, args.out, args.format, verify=args.verify)
     except Exception as exc:
-        print(f"ERROR: download failed: {exc}", file=sys.stderr)
+        print(f"ERROR: voice catalog download failed: {exc}", file=sys.stderr)
         return 1
-
-    import shutil
-
-    def move(src_rel: str) -> None:
-        dst_rel = local_relpath(src_rel, flat_map, tree_prefixes)
-        if dst_rel is None:
-            print(f"  SKIP unexpected file: {src_rel}", file=sys.stderr)
-            return
-        src = os.path.join(cache_dir, src_rel)
-        dst = os.path.join(args.out, dst_rel)
-        if not os.path.exists(src):
-            print(f"  MISSING after download: {src_rel}", file=sys.stderr)
-            return
-        os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
-        if os.path.exists(dst):
-            os.remove(dst)
-        os.replace(src, dst)
-        size_mb = os.path.getsize(dst) / 1e6
-        print(f"  {dst_rel}  ({size_mb:.1f} MB)")
-
-    for src_rel in missing_flat + tree_missing_files:
-        if not src_rel.endswith(".lock"):
-            move(src_rel)
-
-    shutil.rmtree(cache_dir, ignore_errors=True)
 
     if args.verify:
         try:

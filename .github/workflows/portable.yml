@@ -71,7 +71,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .model-cache
-          key: holos-models-v2-bundle-${{ runner.os }}
+          key: holos-models-v3-bundle-${{ runner.os }}
 
       - name: Download models
         run: |
@@ -162,7 +162,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .model-cache
-          key: holos-models-v2-bundle-${{ runner.os }}
+          key: holos-models-v3-bundle-${{ runner.os }}
 
       - name: Download models
         run: |
@@ -415,7 +415,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .model-cache
-          key: holos-models-v2-bundle-${{ runner.os }}
+          key: holos-models-v3-bundle-${{ runner.os }}
 
       - name: Download models
         shell: pwsh
@@ -616,7 +616,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .model-cache
-          key: holos-models-v2-bundle-${{ runner.os }}
+          key: holos-models-v3-bundle-${{ runner.os }}
 
       - name: Download models
         shell: pwsh

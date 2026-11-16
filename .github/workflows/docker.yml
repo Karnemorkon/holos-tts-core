@@ -110,15 +110,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: models
-          key: holos-models-v3-cc0
+          key: holos-models-v4-cc0-17
 
-      - name: Download models (only if cache miss)
+      - name: Download models (refresh voices always)
         run: |
-          if [ ! -f models/holos-onnx/holos_onnx.json ]; then
-            python3 -m venv .venv
-            .venv/bin/pip install -q huggingface_hub
-            .venv/bin/python scripts/download_models.py --out models --format bundle
-          fi
+          python3 -m venv .venv
+          .venv/bin/pip install -q huggingface_hub
+          .venv/bin/python scripts/download_models.py --out models --format bundle
 
       - name: Run container
         run: |
@@ -136,10 +134,10 @@ jobs:
             sleep 2
           done
           cat /tmp/healthz.json
-          jq -e '.status == "ok" and .cloning == true and .voices == 29 and .verbalizer == "neural+rule" and (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' /tmp/healthz.json
+          jq -e '.status == "ok" and .cloning == true and .voices == 17 and .verbalizer == "neural+rule" and (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' /tmp/healthz.json
           curl -sf -X POST http://127.0.0.1:8004/api/synthesize \
             -H 'Content-Type: application/json' \
-            -d '{"text":"Привіт, світе! Це тест синтезу мовлення українською.","voice":"Жіноче контральто · доросле · рівне"}' \
+            -d '{"text":"Привіт, світе! Це тест синтезу мовлення українською.","voice":"Жіноче контральто · доросле · темне"}' \
             -o /tmp/synth.json
           jq -e '.audio_base64 | length > 10000' /tmp/synth.json
           python3 - <<'EOF'
@@ -232,5 +230,5 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: ${{ env.IMAGE }}
-          short-description: "Ukrainian TTS in C++20: 29 CC0 voices, cloning, dialogue, stress, REST/OpenAI/WS"
+          short-description: "Ukrainian TTS in C++20: 17 CC0 voices, cloning, dialogue, stress, REST/OpenAI/WS"
           readme-filepath: ./dockerhub/overview.md
