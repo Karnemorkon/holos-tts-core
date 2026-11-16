@@ -16,6 +16,12 @@ import urllib.parse
 import urllib.request
 import wave
 
+# Voice names are Ukrainian; the Windows CI console defaults to cp1252 and
+# would otherwise crash on the first non-ASCII print after a successful synth.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8004").rstrip("/")
 EXPECT_VERSION = sys.argv[2] if len(sys.argv) > 2 else None
 EXPECTED_VOICES = 17
