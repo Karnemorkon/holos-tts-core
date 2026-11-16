@@ -4,7 +4,7 @@
 публічну мережу без reverse proxy. Тіло запитів і відповідей — JSON (`Content-Type:
 application/json`), якщо не вказано інше.
 
-Вбудований каталог — **29 CC0-голосів** з описовими українськими назвами. Точний
+Вбудований каталог — **17 CC0-голосів** з описовими українськими назвами. Точний
 список завжди доступний у `GET /api/voices`; назви чутливі до регістру, пробілів і
 розділювача `·`. Старі `Speaker_*` більше не працюють — див.
 [MIGRATION.md](MIGRATION.md).
@@ -25,7 +25,7 @@ application/json`), якщо не вказано інше.
 ```bash
 curl -s -X POST http://localhost:8004/api/synthesize \
   -H 'Content-Type: application/json' \
-  -d '{"text":"Привіт, світе! Це тест синтезу мовлення українською.","voice":"Жіноче контральто · доросле · рівне"}' \
+  -d '{"text":"Привіт, світе! Це тест синтезу мовлення українською.","voice":"Жіноче контральто · доросле · темне"}' \
   | python3 -c 'import sys,json,base64; open("out.wav","wb").write(base64.b64decode(json.load(sys.stdin)["audio_base64"]))'
 ```
 
@@ -52,7 +52,7 @@ verbalized_text, duration_sec, start_offset_ms, raw_stress, auto_verbalize}], au
 ```bash
 curl -s -X POST http://localhost:8004/api/synthesize_dialogue \
   -H 'Content-Type: application/json' \
-  -d '{"segments":[{"text":"Привіт, я Олена.","voice":"Жіноче контральто · доросле · рівне"},
+  -d '{"segments":[{"text":"Привіт, я Олена.","voice":"Жіноче контральто · доросле · темне"},
                    {"text":"Привіт, я Іван.","voice":"Чоловічий баритон · зрілий · теплий","start_offset_ms":1200}]}' \
   | python3 -c 'import sys,json,base64; open("dialog.wav","wb").write(base64.b64decode(json.load(sys.stdin)["audio_base64"]))'
 ```
@@ -85,7 +85,7 @@ curl -s http://localhost:8004/healthz      # статус, version, провай
 | Поле | Опис |
 |---|---|
 | `input` | текст (автовербалізація цифр) |
-| `voice` | назва пресета з `/api/voices` (`Жіноче контральто · доросле · рівне`), клон (`My Voice`) або ім'я OpenAI (`alloy`, `nova`, …) |
+| `voice` | назва пресета з `/api/voices` (`Жіноче контральто · доросле · темне`), клон (`My Voice`) або ім'я OpenAI (`alloy`, `nova`, …) |
 | `response_format` | `wav` (типово), `pcm`; `mp3` — кодек не підключено (400) |
 | `speed` | 0.25–4.0 (типово 1.0) |
 | `stream` | `true` → потокова відповідь |
@@ -93,13 +93,23 @@ curl -s http://localhost:8004/healthz      # статус, version, провай
 Автентифікація не потрібна; поле `model` приймається й ігнорується.
 
 OpenAI-імена `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer` мапляться
-**позиційно** на перші шість голосів каталогу в порядку `/api/voices`. Для
-контрольованого тембру передавайте повну назву голосу.
+**позиційно** на перші шість голосів каталогу в порядку `/api/voices`:
+
+| OpenAI `voice` | Фактичний голос |
+|---|---|
+| `alloy` | Жіноче контральто · доросле · темне |
+| `echo` | Жіноче контральто · доросле · яскраве |
+| `fable` | Жіноче мецо-сопрано · молоде · ясне |
+| `onyx` | Жіноче мецо-сопрано · старше · тепле |
+| `nova` | Жіноче сопрано · доросле · тепле |
+| `shimmer` | Жіноче сопрано · зріле · дуже високе |
+
+Для контрольованого тембру передавайте повну назву голосу.
 
 ```bash
 curl -s -X POST http://localhost:8004/v1/audio/speech \
   -H 'Content-Type: application/json' \
-  -d '{"model":"tts-1","input":"Привіт!","voice":"Жіноче контральто · доросле · рівне","response_format":"wav"}' \
+  -d '{"model":"tts-1","input":"Привіт!","voice":"Жіноче контральто · доросле · темне","response_format":"wav"}' \
   -o speech.wav
 ```
 

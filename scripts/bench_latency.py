@@ -12,7 +12,7 @@ timings; без нього скрипт все одно міряє клієнт�
 Приклад:
   python3 scripts/bench_latency.py --url http://127.0.0.1:8005 --runs 3
   python3 scripts/bench_latency.py --cold-container holos-core-bench
-  python3 scripts/bench_latency.py --voice "Жіноче контральто · доросле · рівне"
+  python3 scripts/bench_latency.py --voice "Жіноче контральто · доросле · темне"
 """
 import argparse
 import asyncio

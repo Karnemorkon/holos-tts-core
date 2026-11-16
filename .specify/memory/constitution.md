@@ -1,34 +1,41 @@
 <!--
 Sync Impact Report
 ==================
-Version change: 1.0.0 → 2.0.0 (MAJOR)
-Reason: the built-in voice catalog was intentionally replaced. The retired
-27 Speaker_* voices are absent from every native model format and cannot be
-preserved; keeping them in the constitution would contradict the shipped
-models. The project remains pre-1.0, so the catalog replacement ships as
-project version 0.8.9 with an explicit migration guide.
+Version change: 2.0.0 → 3.0.0 (MAJOR)
+Reason: the built-in voice catalog was revised and its source of truth moved.
+The catalog is now published in the Morkon/holos-voices-uk-cc0 dataset and
+contains 17 CC0 voices instead of 29. Twelve voices were retired; their names
+are absent from every current runtime file and cannot be preserved. Keeping
+the previous catalog definition would contradict the shipped models. The
+project remains pre-1.0, so the revision ships under project version 0.8.9
+with an explicit migration guide.
 
 Modified principles:
-- II. Voice Catalog and OpenAI API Compatibility — redefined around the
-  Morkon/holos-native-models catalog with descriptive names. At the time of
-  this amendment the catalog contains 29 CC0 voices, identical in the bundle
-  (voices.npz), legacy (voices.json), and PyTorch (voices.pt) formats. The
-  retired Speaker_* names are explicitly outside the catalog and are covered
-  by docs/MIGRATION.md.
+- II. Voice Catalog and OpenAI API Compatibility — redefined around
+  Morkon/holos-voices-uk-cc0. At the time of this amendment the catalog
+  contains 17 CC0 voices. The authoritative files are the dataset runtime
+  subdirectories: onnx/, onnx-int8/, mlx/ (voices.npz with names + values) and
+  litert/ (voices.bin + holos_litert.json). Dataset root files are the retired
+  29-voice set and MUST NOT be used. The 12 retired voice names are explicitly
+  outside the catalog and are covered by docs/MIGRATION.md.
 
 Added sections: none
 Removed sections: none
 Updated artifacts:
-- docs/MIGRATION.md (new migration and rollback guide)
-- docs/RELEASE-0.8.9.md (new release notes)
-- README.md, docs/API.md, docs/MODELS.md, docs/CONFIGURATION.md,
-  docs/BENCHMARKS.md, dockerhub/overview.md
-- scripts/download_models.py, scripts/bench_latency.py,
-  src/cli/holos_cli.cpp, tests/test_synth.cpp, tools/run_pcm_parity.py
-- version 0.8.8 → 0.8.9 in CMake, Cargo, Tauri, package metadata, README,
-  and Docker Hub metadata
+- docs/MIGRATION.md (29 → 17 migration, 12 removed voices, rollback)
+- docs/RELEASE-0.8.9.md (catalog revision section, dated 2026-11-16)
+- README.md, docs/MODELS.md, docs/API.md, docs/BENCHMARKS.md,
+  dockerhub/overview.md
+- scripts/download_models.py, scripts/smoke_api.py, scripts/bench_latency.py,
+  tools/run_pcm_parity.py
+- packaging/linux/download-models.sh, packaging/windows/download-models.ps1
+- .github/workflows/docker.yml, .github/workflows/portable.yml,
+  .github/workflows/dockerhub-readme.yml
+- project version remains 0.8.9
 
-Follow-up TODOs: none
+Follow-up TODOs:
+- Replace the GitHub Release v0.8.9 asset voices.npz with the 17-voice file
+  after this amendment merges.
 -->
 
 # HolosTTS Core Constitution
@@ -49,28 +56,37 @@ operational dependency, and lets the service run on ordinary machines without a 
 ### II. Voice Catalog and OpenAI API Compatibility (NON-NEGOTIABLE)
 
 The built-in voice catalog MUST be the catalog published in
-`Morkon/holos-native-models`, using its descriptive voice names. At the time of this amendment
-the catalog contains 29 CC0 voices. The same catalog — identical names and identical
-256-dimensional embeddings — MUST be present in every native model format: the bundle
-(`voices.npz`), legacy (`voices.json`), and PyTorch (`voices.pt`).
+`Morkon/holos-voices-uk-cc0`, using its descriptive voice names. At the time of this
+amendment the catalog contains 17 CC0 voices. The authoritative source is the dataset
+runtime subdirectories: `onnx/voices.npz`, `onnx-int8/voices.npz`, and `mlx/voices.npz`
+(each with `names` and `values`, 17 × 256 float32), plus `litert/voices.bin` and
+`litert/holos_litert.json`. Dataset root files (`voices.npz`, `voices.bin`, `voices.json`,
+`voices.pt`, `names.json`) are the retired 29-voice set and MUST NOT be used. The same
+catalog — identical names and identical 256-dimensional embeddings — MUST be present in
+every runtime format the project ships.
 
-Every release MUST keep all voices of the current catalog available under their existing names,
-with their existing behavior. The OpenAI-compatible `POST /v1/audio/speech` endpoint MUST remain
-usable by clients that only replace `base_url`. It MUST accept `input`, `voice`,
-`response_format`, `speed`, `stream`, and `model` (accepted and ignored) as documented, and MUST
-continue to support `wav` and `pcm` responses. OpenAI voice names (`alloy`, `echo`, `fable`,
-`onyx`, `nova`, `shimmer`) MUST map positionally to the first six voices of the current catalog.
+Every release MUST expose every voice of the current catalog under its exact name and
+with its documented behavior. The model downloader MUST refresh the voice catalog on
+every run, even when the remaining model files are already present, so existing
+installations receive catalog revisions. The OpenAI-compatible `POST /v1/audio/speech`
+endpoint MUST remain usable by clients that only replace `base_url`. It MUST accept
+`input`, `voice`, `response_format`, `speed`, `stream`, and `model` (accepted and
+ignored) as documented, and MUST continue to support `wav` and `pcm` responses. OpenAI
+voice names (`alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer`) MUST map positionally
+to the first six voices of the current catalog.
 
-Voice cloning MAY add new voices, but it MUST NOT remove, rename, or shadow any voice of the
-current catalog. The retired `Speaker_*` names are not part of the catalog; their removal is
-covered by `docs/MIGRATION.md`. A change that breaks an existing client contract MUST ship with
-an explicit migration path. While the project is in the 0.x series, such a change MAY ship in a
-MINOR or PATCH release; from 1.0.0 onward it requires a project MAJOR release.
+Voice cloning MAY add new voices, but it MUST NOT remove, rename, or shadow any voice of
+the current catalog. The retired `Speaker_*` names and the 12 voices retired in the
+17-voice revision are not part of the catalog; their removal is covered by
+`docs/MIGRATION.md`. A change that removes or renames catalog voices, or otherwise breaks
+an existing client contract, MUST ship with an explicit migration path. While the project
+is in the 0.x series, such a change MAY ship in a MINOR or PATCH release; from 1.0.0
+onward it requires a project MAJOR release.
 
-Rationale: users and integrations depend on a stable voice catalog and request/response contract;
-silent renames or removals break existing audio pipelines. The catalog is defined by the models
-that actually ship, so the constitution must track that catalog instead of preserving retired
-names that no longer exist in any native model format.
+Rationale: users and integrations depend on a stable voice catalog and request/response
+contract; silent renames or removals break existing audio pipelines. The catalog is
+defined by the models that actually ship, so the constitution must track that catalog and
+its runtime source of truth instead of preserving retired names or stale dataset files.
 
 ### III. Windows ONNX Runtime 1.17.1 Compatibility
 
@@ -156,4 +172,4 @@ violation blocks merge or release until it is fixed or the constitution is amend
 exceptions are permitted; a temporary exception requires a documented amendment with an expiry
 date.
 
-**Version**: 2.0.0 | **Ratified**: 2026-11-13 | **Last Amended**: 2026-11-14
+**Version**: 3.0.0 | **Ratified**: 2026-11-13 | **Last Amended**: 2026-11-16

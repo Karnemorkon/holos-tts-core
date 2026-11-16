@@ -18,6 +18,7 @@ import wave
 
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8004").rstrip("/")
 EXPECT_VERSION = sys.argv[2] if len(sys.argv) > 2 else None
+EXPECTED_VOICES = 17
 NAME = "Smoke Portable"
 
 
@@ -74,6 +75,7 @@ def wait_ready(timeout=READY_TIMEOUT):
 h = wait_ready()
 assert h.get("status") == "ok", h
 assert h.get("cloning") is True, f"cloning disabled: {h}"
+assert h.get("voices") == EXPECTED_VOICES, f"voices {h.get('voices')} != {EXPECTED_VOICES}"
 if EXPECT_VERSION:
     assert h.get("version") == EXPECT_VERSION, f"version {h.get('version')} != {EXPECT_VERSION}"
 print(f"healthz OK: version={h.get('version')} voices={h.get('voices')}")
