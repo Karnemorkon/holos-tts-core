@@ -53,8 +53,9 @@ python3 scripts/download_models.py --out models --format legacy  # старий 
 
 `scripts/download_models.py` оновлює каталог голосів **завжди** (файл ~21 КБ),
 навіть якщо решта моделей уже наявна, і переписує рядок `voices.npz` у
-`holos-onnx/SHA256SUMS`. Перевизначити джерело можна через `--voices-url` або
-`HOLOS_VOICES_URL`.
+`holos-onnx/SHA256SUMS`. Desktop-застосунок (Tauri) робить те саме під час
+запуску; офлайн він працює з локальною копією. Перевизначити джерело можна
+через `--voices-url` або `HOLOS_VOICES_URL`.
 
 ## Формати моделей
 
