@@ -7,6 +7,9 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 const HF_BASE: &str = "https://huggingface.co/Morkon/holos-native-models/resolve/main";
+const VOICES_URL: &str =
+    "https://huggingface.co/datasets/Morkon/holos-voices-uk-cc0/resolve/main/onnx/voices.npz";
+const VOICES_DST: &str = "holos-onnx/voices.npz";
 const MAX_ATTEMPTS: u32 = 3;
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -14,6 +17,8 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 // Типовий формат — багатоетапний бандл holos-onnx (encoder/prosody/decoder +
 // streaming); legacy-граф holos_cpu_int8.onnx більше не завантажується, але
 // старі інсталяції з ним продовжують працювати (HOLOS_MODEL_FORMAT=legacy).
+// Каталог голосів живе в окремому датасеті й оновлюється завжди (VOICES_URL),
+// а не пропускається, як ваги.
 const FILES: &[(&str, &str)] = &[
     ("holos-onnx-int8/holos_onnx.json", "holos-onnx/holos_onnx.json"),
     ("holos-onnx-int8/encoder.onnx", "holos-onnx/encoder.onnx"),
@@ -21,7 +26,6 @@ const FILES: &[(&str, &str)] = &[
     ("holos-onnx-int8/decoder.onnx", "holos-onnx/decoder.onnx"),
     ("holos-onnx-int8/decoder_window.onnx", "holos-onnx/decoder_window.onnx"),
     ("holos-onnx-int8/source.onnx", "holos-onnx/source.onnx"),
-    ("holos-onnx-int8/voices.npz", "holos-onnx/voices.npz"),
     ("stress/stress.trie", "stress.trie"),
     ("accentor/accentor-lite.onnx", "accentor-lite.onnx"),
     ("tts/voice_encoder.onnx", "voice_encoder.onnx"),
@@ -30,6 +34,21 @@ const FILES: &[(&str, &str)] = &[
     ("verbalizer/gemma-int8/config.json", "verbalizer/gemma-int8/config.json"),
     ("verbalizer/gemma-int8/GEMMA-NOTICE.txt", "verbalizer/gemma-int8/GEMMA-NOTICE.txt"),
 ];
+
+fn all_files() -> impl Iterator<Item = (&'static str, &'static str)> {
+    FILES
+        .iter()
+        .copied()
+        .chain(std::iter::once((VOICES_URL, VOICES_DST)))
+}
+
+fn url_for(src: &str) -> String {
+    if src.starts_with("https://") || src.starts_with("http://") {
+        src.to_string()
+    } else {
+        format!("{HF_BASE}/{src}")
+    }
+}
 
 pub fn models_dir() -> PathBuf {
     #[cfg(windows)]
@@ -90,7 +109,7 @@ pub fn status() -> Status {
     let mut files = Vec::new();
     let mut total = 0u64;
     let mut have = 0u64;
-    for (_, dst) in FILES {
+    for (_, dst) in all_files() {
         let p = dir.join(dst);
         let sz = file_size(&p);
         let ok = present(&p);
@@ -125,20 +144,29 @@ pub async fn download_all(app: &AppHandle) -> Result<(), String> {
         .build()
         .map_err(|e| e.to_string())?;
 
-    for (i, (src, dst)) in FILES.iter().enumerate() {
+    // Завантажуємо лише відсутні ваги, але каталог голосів — завжди.
+    let jobs: Vec<(&str, &str)> = FILES
+        .iter()
+        .copied()
+        .filter(|(_, dst)| !present(&dir.join(dst)))
+        .chain(std::iter::once((VOICES_URL, VOICES_DST)))
+        .collect();
+    let total_files = jobs.len();
+
+    for (i, &(src, dst)) in jobs.iter().enumerate() {
         let out = dir.join(dst);
-        if present(&out) {
-            continue;
-        }
         if let Some(parent) = out.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        let url = format!("{HF_BASE}/{src}");
+        let url = url_for(src);
         let part = out.with_extension("part");
         let mut last_err = String::new();
         let mut done = false;
-        for attempt in 1..=MAX_ATTEMPTS {
-            match download_one(app, &client, &url, dst, i, &part).await {
+        // Каталог голосів маленький: одна швидка спроба, щоб не гальмувати
+        // запуск застосунку без мережі.
+        let attempts = if dst == VOICES_DST { 1 } else { MAX_ATTEMPTS };
+        for attempt in 1..=attempts {
+            match download_one(app, &client, &url, dst, i, total_files, &part).await {
                 Ok(()) => {
                     done = true;
                     break;
@@ -146,14 +174,23 @@ pub async fn download_all(app: &AppHandle) -> Result<(), String> {
                 Err(e) => {
                     last_err = e;
                     let _ = fs::remove_file(&part);
-                    if attempt < MAX_ATTEMPTS {
+                    if attempt < attempts {
                         tokio::time::sleep(Duration::from_secs(1 << (attempt - 1))).await;
                     }
                 }
             }
         }
         if !done {
+            // Не заважаємо запуску офлайн, якщо старий каталог уже є.
+            if dst == VOICES_DST && present(&out) {
+                eprintln!("voice catalog refresh failed, keeping existing file: {last_err}");
+                continue;
+            }
             return Err(last_err);
+        }
+        // Windows rename не перезаписує наявний файл (актуально для каталогу голосів).
+        if out.exists() {
+            fs::remove_file(&out).map_err(|e| format!("{dst}: {e}"))?;
         }
         fs::rename(&part, &out).map_err(|e| e.to_string())?;
     }
@@ -166,9 +203,18 @@ async fn download_one(
     url: &str,
     dst: &str,
     index: usize,
+    total_files: usize,
     part: &Path,
 ) -> Result<(), String> {
-    let mut resp = client.get(url).send().await.map_err(|e| format!("{dst}: {e}"))?;
+    let mut resp = {
+        let req = client.get(url);
+        let req = if dst == VOICES_DST {
+            req.timeout(Duration::from_secs(10))
+        } else {
+            req
+        };
+        req.send().await.map_err(|e| format!("{dst}: {e}"))?
+    };
     if !resp.status().is_success() {
         return Err(format!("{dst}: HTTP {}", resp.status()));
     }
@@ -181,7 +227,7 @@ async fn download_one(
         Progress {
             file: dst.to_string(),
             index,
-            total_files: FILES.len(),
+            total_files,
             downloaded: 0,
             file_bytes,
         },
@@ -195,7 +241,7 @@ async fn download_one(
                 Progress {
                     file: dst.to_string(),
                     index,
-                    total_files: FILES.len(),
+                    total_files,
                     downloaded,
                     file_bytes,
                 },
@@ -213,7 +259,7 @@ async fn download_one(
         Progress {
             file: dst.to_string(),
             index,
-            total_files: FILES.len(),
+            total_files,
             downloaded,
             file_bytes: file_bytes.max(downloaded),
         },

@@ -49,8 +49,17 @@ async function boot(){
       btn.onclick=download;
       return;
     }
-    await startServer();
+    await refreshVoices();
   }catch(e){fail(e,boot)}
+}
+
+async function refreshVoices(){
+  st.className="status";
+  st.textContent="Оновлення каталогу голосів…";
+  try{
+    await invoke("download_models");
+  }catch(e){fail(e,refreshVoices);return}
+  await startServer();
 }
 
 async function download(){

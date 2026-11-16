@@ -23,7 +23,8 @@
   [MIGRATION.md](MIGRATION.md).
 - `scripts/download_models.py` тепер **завжди** освіжає `voices.npz` (~21 КБ)
   навіть без `--force` і переписує рядок `voices.npz` у `holos-onnx/SHA256SUMS`,
-  тому наявні інсталяції та CI-кеші отримують новий каталог.
+  тому наявні інсталяції та CI-кеші отримують новий каталог. Desktop-лаунчер
+  (Tauri) оновлює каталог під час запуску й офлайн працює з локальною копією.
 - Legacy `voices.json` генерується з датасетного `voices.npz` (17 записів);
   `tts/voices.json` більше не завантажується з репозиторію ваг.
 - Перевірки: `EXPECTED_VOICES = 17` у downloader'і, Docker smoke
