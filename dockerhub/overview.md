@@ -16,8 +16,8 @@ OpenAI-compatible endpoint, WebSocket streaming and a built-in Web UI with **voi
 
 ## Features
 
-- Ukrainian speech synthesis, 24 kHz, **29 CC0 preset voices** with descriptive names
-  (see [Morkon/holos-voices-uk-cc0](https://huggingface.co/Morkon/holos-voices-uk-cc0))
+- Ukrainian speech synthesis, 24 kHz, **17 CC0 preset voices** with descriptive names
+  (see [Morkon/holos-voices-uk-cc0](https://huggingface.co/datasets/Morkon/holos-voices-uk-cc0))
 - **Voice cloning** from a WAV sample (ONNX voice encoder)
 - **INT8 ONNX generator** on CPU — no GPU required, x86-64 and ARM64
 - **Automatic verbalization**: Gemma-3-270M int8 (`neural`, default), C++ rules (`rule`), or `off`
@@ -33,16 +33,17 @@ OpenAI-compatible endpoint, WebSocket streaming and a built-in Web UI with **voi
 
 ## Voices
 
-The built-in catalog contains **29 voices** with descriptive Ukrainian names. All
+The built-in catalog contains **17 voices** with descriptive Ukrainian names. All
 preset voices are released under **CC0-1.0** in
-[Morkon/holos-voices-uk-cc0](https://huggingface.co/Morkon/holos-voices-uk-cc0);
-the model weights remain MIT-licensed. The same catalog is shipped in
-`voices.npz`, `voices.json` and `voices.pt`.
+[Morkon/holos-voices-uk-cc0](https://huggingface.co/datasets/Morkon/holos-voices-uk-cc0);
+the model weights remain MIT-licensed. The catalog is shipped as `voices.npz`
+(bundle) and generated into `voices.json` (legacy). The dataset root files are
+the retired 29-voice set; use the runtime subdirectories.
 
 Upgrading from 0.8.x: the retired `Speaker_*` names are no longer part of the
 catalog and return `404`. See the
 [migration guide](https://github.com/Karnemorkon/holos-tts-core/blob/main/docs/MIGRATION.md)
-for the 29-voice table, OpenAI aliases and rollback.
+for the 17-voice table, the 12 removed voices, OpenAI aliases and rollback.
 
 ## Quick start
 
@@ -129,7 +130,7 @@ Custom JSON endpoint:
 ```bash
 curl -X POST http://localhost:8004/api/synthesize \
   -H 'Content-Type: application/json' \
-  -d '{"text":"Привіт, це HolosTTS.","voice":"Жіноче контральто · доросле · рівне"}'
+  -d '{"text":"Привіт, це HolosTTS.","voice":"Жіноче контральто · доросле · темне"}'
 # -> JSON with duration_sec, verbalized_text and audio_base64 (WAV)
 ```
 
@@ -138,7 +139,7 @@ Multi-speaker dialogue:
 ```bash
 curl -X POST http://localhost:8004/api/synthesize_dialogue \
   -H 'Content-Type: application/json' \
-  -d '{"segments":[{"text":"Привіт, я Олена.","voice":"Жіноче контральто · доросле · рівне"},
+  -d '{"segments":[{"text":"Привіт, я Олена.","voice":"Жіноче контральто · доросле · темне"},
                    {"text":"Привіт, я Іван.","voice":"Чоловічий баритон · зрілий · теплий","start_offset_ms":1200}]}'
 # -> JSON with per-segment offsets and a mixed audio_base64 (WAV)
 ```
@@ -148,7 +149,7 @@ OpenAI-compatible endpoint:
 ```bash
 curl -X POST http://localhost:8004/v1/audio/speech \
   -H 'Content-Type: application/json' \
-  -d '{"model":"tts-1","input":"Привіт!","voice":"Жіноче контральто · доросле · рівне","response_format":"wav"}' \
+  -d '{"model":"tts-1","input":"Привіт!","voice":"Жіноче контральто · доросле · темне","response_format":"wav"}' \
   -o speech.wav
 ```
 
@@ -196,5 +197,5 @@ WebSocket: `/api/ws/synthesize` (PCM16 chunks). No authentication.
 
 Project code: see [LICENSE](https://github.com/Karnemorkon/holos-tts-core/blob/main/LICENSE).
 Built-in voices are CC0-1.0
-([Morkon/holos-voices-uk-cc0](https://huggingface.co/Morkon/holos-voices-uk-cc0)).
+([Morkon/holos-voices-uk-cc0](https://huggingface.co/datasets/Morkon/holos-voices-uk-cc0)).
 Model weights remain under their original MIT license by the model author.

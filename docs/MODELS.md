@@ -1,14 +1,17 @@
 # Моделі
 
-Усі моделі — у публічному HF-репозиторії
-**[Morkon/holos-native-models](https://huggingface.co/Morkon/holos-native-models)**
-(токен не потрібен). Повний репозиторій ~1.8 ГБ, типовий набір — ~0.6 ГБ;
+Ваги — у публічному HF-репозиторії
+**[Morkon/holos-native-models](https://huggingface.co/Morkon/holos-native-models)**,
+каталог голосів — в окремому датасеті
+**[Morkon/holos-voices-uk-cc0](https://huggingface.co/datasets/Morkon/holos-voices-uk-cc0)**
+(токен не потрібен). Повний репозиторій ваг ~1.8 ГБ, типовий набір — ~0.6 ГБ;
 fp32/legacy/CT2-бекапи вантажаться лише за потреби.
 
 | Компонент | Шлях у репо | Застосунок |
 |---|---|---|
 | Багатоетапний бандл holos-onnx int8 (дефолт) | `holos-onnx-int8/` | генерація аудіо (encoder/prosody/decoder + streaming) |
-| TTS ONNX int8 + vocab + voices (legacy) | `tts/` | генерація аудіо одним графом |
+| Каталог голосів (17 CC0) | датасет `holos-voices-uk-cc0/onnx/voices.npz` | пресети голосів |
+| TTS ONNX int8 + vocab (legacy) | `tts/` | генерація аудіо одним графом; `voices.json` генерується з датасету |
 | Voice encoder ONNX int8 (80 МБ) | `tts/voice_encoder.onnx` | клонування голосу (24 кГц → 256-dim) |
 | Neural verbalizer Gemma-3-270M int8 (дефолт) | `verbalizer/gemma-int8/` | цифри→слова (якість) |
 | Neural verbalizer M2M100 int8 (legacy) | `verbalizer/onnx-int8/` | відкат, `--with-m2m100` |
@@ -28,18 +31,30 @@ python3 scripts/download_models.py --out models --format legacy  # старий 
 
 ## Каталог голосів
 
-Вбудований каталог — **29 CC0-голосів** з описовими українськими назвами.
-Він однаковий у всіх форматах native-моделей:
+Вбудований каталог — **17 CC0-голосів** з описовими українськими назвами.
+Джерело істини — runtime-підкаталоги датасету
+[Morkon/holos-voices-uk-cc0](https://huggingface.co/datasets/Morkon/holos-voices-uk-cc0):
 
-| Формат | Файл | Перевірка |
+| Runtime | Файл | Формат |
 |---|---|---|
-| Bundle | `holos-onnx/voices.npz` | рівно `names` + `values`, `(29,)` + `(29, 256)`, `float32`, finite, унікальні імена |
-| Legacy | `tts/voices.json` | 29 записів × 256 finite floats |
-| PyTorch | `tts/voices.pt` | 29 тензорів `float32[256]` |
+| `onnx/` | `voices.npz` | 17 × 256 `float32`, ключі `names` + `values` |
+| `onnx-int8/` | `voices.npz` | те саме |
+| `mlx/` | `voices.npz` | те саме |
+| `litert/` | `voices.bin` | сирі `float32` підряд, 17 × 256 |
+| `litert/` | `holos_litert.json` | оновлений `voices.names` |
 
-`voices.npz` містить лише два масиви: `names.npy` (`<U…`) і `values.npy`
-(`<f4`, shape `(29, 256)`). `cv_uk_*` у паку — це `legacy_id`, а не назва для
-API. Повний список і міграція — [MIGRATION.md](MIGRATION.md).
+> **Увага:** файли в **корені** датасету (`voices.npz`, `voices.bin`,
+> `voices.json`, `voices.pt`, `names.json`) — це застарілий 29-голосовий набір.
+> Не використовуйте їх; завантажувач бере лише runtime-підкаталоги.
+
+`voices.npz` містить рівно два масиви: `names.npy` (`<U…`) і `values.npy`
+(`<f4`, shape `(17, 256)`); жодних `cv_uk_*` у рантаймі немає. Повний список і
+міграція зі старого каталогу — [MIGRATION.md](MIGRATION.md).
+
+`scripts/download_models.py` оновлює каталог голосів **завжди** (файл ~21 КБ),
+навіть якщо решта моделей уже наявна, і переписує рядок `voices.npz` у
+`holos-onnx/SHA256SUMS`. Перевизначити джерело можна через `--voices-url` або
+`HOLOS_VOICES_URL`.
 
 ## Формати моделей
 
@@ -62,7 +77,7 @@ holos-onnx/
   decoder.onnx        # exact-режим: повний кадровий ряд -> аудіо
   decoder_window.onnx # streaming: вікно кадрів (+ source) -> аудіо-чанк
   source.onnx         # f0 -> збудження для window-декодера
-  voices.npz          # 29 CC0-голосів (names.npy + values.npy, 256-dim)
+  voices.npz          # 17 CC0-голосів (names.npy + values.npy, 256-dim)
 ```
 
 `voices.npz` читається нативно (ZIP64 + DEFLATE через zlib, `.npy`-парсер), без
@@ -90,11 +105,8 @@ holos-onnx/
 ## Ліцензії
 
 Ваги HolosTTS належать [patriotyk](https://github.com/patriotyk) і розповсюджуються за
-MIT. Вбудовані голоси — **CC0-1.0**, пак
-[Morkon/holos-voices-uk-cc0](https://huggingface.co/Morkon/holos-voices-uk-cc0).
+MIT. Вбудовані голоси — **CC0-1.0**, датасет
+[Morkon/holos-voices-uk-cc0](https://huggingface.co/datasets/Morkon/holos-voices-uk-cc0).
 Вербалізатор Gemma 3 270M — © Google, [Gemma Terms of Use](https://ai.google.dev/gemma/terms);
 похідна — [skypro1111/gemma-3-270m-uk-verbalizer](https://huggingface.co/skypro1111/gemma-3-270m-uk-verbalizer).
 Legacy M2M100 — [Helsinki-NLP](https://huggingface.co/Helsinki-NLP) / [skypro1111](https://huggingface.co/skypro1111).
-
-Примітка: `k33` (`Юнацький голос · дівчина · високий · теплий`) у паку
-зберігається як `raw`. `app_postprocess` із `tempo 1.05` застосовується навколо ядра, а не сервером `holos-tts-core`.

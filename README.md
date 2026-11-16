@@ -10,7 +10,7 @@
 
 > **English summary:** production-ready Dockerized **Ukrainian text-to-speech** service
 > (REST + OpenAI-compatible + WebSocket + Web UI, port 8004) in **C++20 + ONNX Runtime** —
-> no Python at runtime. 29 CC0 voices, voice cloning, neural verbalization, stress (98.4%
+> no Python at runtime. 17 CC0 voices, voice cloning, neural verbalization, stress (98.4%
 > vs the author's pipeline), multi-speaker dialogue and English transliteration;
 > multi-arch `linux/amd64` + `linux/arm64`. Current release: **0.8.9**.
 
@@ -28,9 +28,9 @@
 
 ## Можливості
 
-- **Синтез українською** 24 кГц: 29 пресетів голосів (**CC0**) + **клонування голосу з WAV**
+- **Синтез українською** 24 кГц: 17 пресетів голосів (**CC0**) + **клонування голосу з WAV**
   (клон зберігається під власним імʼям і стає звичайним `voice` для REST/OpenAI API).
-  Каталог голосів — [Morkon/holos-voices-uk-cc0](https://huggingface.co/Morkon/holos-voices-uk-cc0);
+  Каталог голосів — [Morkon/holos-voices-uk-cc0](https://huggingface.co/datasets/Morkon/holos-voices-uk-cc0);
   міграція зі старих `Speaker_*` — [docs/MIGRATION.md](docs/MIGRATION.md).
 - **Нативний C++20**: Drogon HTTP/WS + ONNX Runtime; без Python, PyTorch і Gradio у рантаймі.
 - **Автовербалізація**: `neural` (Gemma-3-270M int8, типово) / `rule` (C++ регулярки) / `off`;
@@ -68,14 +68,15 @@ curl http://localhost:8004/healthz
 `{"status":"ok","engine":"holos-tts-core-native","version":"0.8.9","verbalizer":"neural+rule","stress":"dictionary-accentor","cloning":true,...}`.
 
 Потрібен Docker + Compose і ≥2 ГБ RAM (neural-дефолт тримає ~1.1 ГБ RSS; rule-only — ~468 МБ).
-Сервіс `downloader` завантажує лише відсутні файли, тож оновлення образу не тягне моделі заново.
+Сервіс `downloader` довантажує лише відсутні файли, а каталог голосів оновлює
+завжди (17 голосів, ~21 КБ), тож оновлення образу не тягне моделі заново.
 
 Перший синтез (WAV `out.wav`):
 
 ```bash
 curl -s -X POST http://localhost:8004/v1/audio/speech \
   -H 'Content-Type: application/json' \
-  -d '{"input":"Привіт, світе! Це тест синтезу мовлення українською.","voice":"Жіноче контральто · доросле · рівне"}' \
+  -d '{"input":"Привіт, світе! Це тест синтезу мовлення українською.","voice":"Жіноче контральто · доросле · темне"}' \
   -o out.wav
 ```
 
@@ -107,6 +108,9 @@ multi-arch **linux/amd64 + linux/arm64**. Публікується лише з �
 
 Моделі публічні: **[Morkon/holos-native-models](https://huggingface.co/Morkon/holos-native-models)**
 (повний репозиторій ~1.8 ГБ, типовий набір — ~0.6 ГБ; fp32/legacy — лише за потреби).
+Каталог голосів — окремий датасет
+**[Morkon/holos-voices-uk-cc0](https://huggingface.co/datasets/Morkon/holos-voices-uk-cc0)**
+(runtime-підкаталоги `onnx/`, `onnx-int8/`, `mlx/`, `litert/`; 17 голосів).
 
 ```bash
 pip install huggingface_hub
@@ -149,7 +153,7 @@ python3 scripts/download_models.py --out models
 | [API](docs/API.md) | REST, OpenAI, WebSocket, клонування голосу |
 | [Конфігурація](docs/CONFIGURATION.md) | змінні, теги образів, compose, ліміти |
 | [Моделі](docs/MODELS.md) | склад, завантаження, legacy-вербалізатор |
-| [Міграція 0.8.9](docs/MIGRATION.md) | 27 `Speaker_*` → 29 CC0-голосів, приклади, відкат |
+| [Міграція 0.8.9](docs/MIGRATION.md) | 29 CC0 → 17 CC0-голосів, приклади, відкат |
 | [Реліз 0.8.9](docs/RELEASE-0.8.9.md) | стислий список змін |
 | [Архітектура](docs/ARCHITECTURE.md) | пайплайн, стрес, вербалізація, структура |
 | [Бенчмарки](docs/BENCHMARKS.md) | латентність, RSS, паритет з hybrid, методика |
@@ -160,8 +164,8 @@ python3 scripts/download_models.py --out models
 ## Ліцензія та подяки
 
 - **Цей репозиторій** (ядро, сервер, UI, оптимізації): [MIT](LICENSE).
-- **Вбудовані голоси** (29 пресетів): [CC0-1.0](https://creativecommons.org/publicdomain/zero/1.0/),
-  пак [Morkon/holos-voices-uk-cc0](https://huggingface.co/Morkon/holos-voices-uk-cc0).
+- **Вбудовані голоси** (17 пресетів): [CC0-1.0](https://creativecommons.org/publicdomain/zero/1.0/),
+  датасет [Morkon/holos-voices-uk-cc0](https://huggingface.co/datasets/Morkon/holos-voices-uk-cc0).
 - **Нейромережа HolosTTS** (ваги бандла `holos-onnx`: `encoder/prosody/decoder`.onnx) належить автору
   **[patriotyk](https://github.com/patriotyk)** і розповсюджується за MIT:
   [github.com/patriotyk/HolosTTS](https://github.com/patriotyk/HolosTTS) ·
