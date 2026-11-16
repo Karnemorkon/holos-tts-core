@@ -105,12 +105,17 @@ volumes:
     name: holos_core_speakers
 ```
 
-`downloader` запускається щоразу, але завантажує лише відсутні файли. Примусово:
+`downloader` запускається щоразу: довантажує лише відсутні ваги, але **завжди**
+освіжає каталог голосів (~21 КБ) і переписує рядок `voices.npz` у
+`holos-onnx/SHA256SUMS`. Примусово перезавантажити все:
 
 ```bash
 docker compose run --rm downloader \
     python3 scripts/download_models.py --out models --force
 ```
+
+Інше джерело каталогу задається через `HOLOS_VOICES_URL` (або `--voices-url`);
+типово — `holos-voices-uk-cc0/onnx/voices.npz`.
 
 Моделі можна підготувати заздалегідь і змонтувати каталог замість named volume:
 

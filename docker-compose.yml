@@ -2,7 +2,7 @@
 #
 # Models: auto-downloaded on first `docker compose up -d` (HF, public repo, no
 # token) into the holos_core_models volume; subsequent starts are instant
-# (downloader fetches only missing files). Default format is the multi-stage
+# (downloader fetches only missing weights and refreshes the voice catalog). Default format is the multi-stage
 # `holos-onnx` bundle (encoder/prosody/decoder + streaming); the legacy
 # single-graph model is still supported via HOLOS_MODEL_FORMAT=legacy.
 #   force re-download: docker compose run --rm downloader python3 scripts/download_models.py --out models --format bundle --force
